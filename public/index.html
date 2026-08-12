@@ -1,0 +1,389 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+    <meta charset="UTF-8">
+    <title>DNS委任チェッカー</title>
+    <style>
+        body {
+            font-family: sans-serif;
+            margin: 0;
+            padding: 20px;
+            background: #f4f6f9;
+            color: #333;
+        }
+        .container {
+            max-width: 1000px;
+            margin: 0 auto;
+            background: white;
+            padding: 25px;
+            border-radius: 12px;
+            box-shadow: 0 4px 15px rgba(0,0,0,0.05);
+        }
+
+        .input-form-container {
+            display: flex;
+            margin-bottom: 20px;
+            flex-direction: column;
+            gap: 20px;
+        }
+        .input-group { width: 100%; }
+        label {
+            display: block;
+            margin-bottom: 8px;
+            color: #34495e;
+            font-weight: bold;
+        }
+        input[type="text"] {
+            width: 100%;
+            padding: 10px;
+            border: 1px solid #ccc;
+            border-radius: 6px;
+            box-sizing: border-box;
+            font-size: 14px;
+        }
+        input[type="text"]:focus {
+            border-color: #3498db;
+            outline: none;
+        }
+
+        /* クイック選択用スタイル */
+        .quick-select-row {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 8px;
+            margin-top: 8px;
+        }
+        .btn-mini {
+            padding: 4px 10px;
+            background: #e2e8f0;
+            color: #4a5568;
+            border: 1px solid #cbd5e1;
+            border-radius: 5px;
+            cursor: pointer;
+            font-size: 12px;
+            font-weight: bold;
+            transition: all 0.2s;
+        }
+        .btn-mini:hover {
+            background: #cbd5e1;
+            color: #1a202c;
+        }
+
+        button.btn-main {
+            padding: 8px 25px;
+            margin-bottom: 20px;
+            background: #007bff;
+            color: white;
+            border: none;
+            border-radius: 6px;
+            cursor: pointer;
+            font-size: 16px;
+            font-weight: bold;
+            margin-bottom: 20px;
+        }
+        button.btn-main:hover {
+            background: #0056b3;
+        }
+
+        /* 横スクロール・自動改行防止付き結果コンテナ */
+        .result-container {
+            background: #fafafa;
+            border: 1px solid #e0e0e0;
+            border-radius: 8px;
+            padding: 20px;
+            min-height: 200px;
+            overflow-x: auto;
+            white-space: nowrap;
+        }
+        .result-container::-webkit-scrollbar {
+            height: 8px;
+        }
+        .result-container::-webkit-scrollbar-track {
+            background: #f1f1f1;
+            border-radius: 4px;
+        }
+        .result-container::-webkit-scrollbar-thumb {
+            background: #ccc;
+            border-radius: 4px;
+        }
+
+        .indent-list {
+            list-style: none;
+            padding: 0;
+            margin: 0;
+        }
+        .indent-list ul {
+            list-style: none;
+            padding-left: 40px;
+            margin-top: 8px;
+            margin-bottom: 8px;
+        }
+
+        .server-item-block {
+            display: inline-flex;
+            flex-direction: column;
+            margin-bottom: 6px;
+            align-items: flex-start;
+        }
+
+        .server-row {
+            display: inline-flex;
+            align-items: center;
+            padding: 10px 15px;
+            border-radius: 6px;
+            font-size: 13px;
+            border-left: 5px solid #ccc;
+            background: white;
+            box-shadow: 0 1px 3px rgba(0,0,0,0.05);
+        }
+
+        /* 標準のマーカー記号設定（すべての階層にいったん └─ をつけます） */
+        .server-row::before {
+            content: "└─ ";
+            color: #999;
+            font-weight: bold;
+            margin-right: 8px;
+            font-family: monospace;
+        }
+
+        /* JavaScriptから「is-root」クラスを直接付与された行だけ、確実に🚩に変えます */
+        .server-row.is-root::before {
+            content: "🚩 ";
+            font-family: sans-serif;
+            margin-right: 8px;
+        }
+
+        .server-ip {
+            font-weight: bold;
+            width: 280px;
+            flex-shrink: 0;
+            font-family: monospace;
+        }
+        .server-status {
+            font-size: 11px;
+            padding: 2px 6px;
+            border-radius: 4px;
+            color: white;
+            font-weight: bold;
+            margin-right: 15px;
+            flex-shrink: 0;
+            text-transform: uppercase;
+        }
+        .server-detail {
+            color: #666;
+            font-size: 12px;
+            white-space: nowrap;
+            overflow: visible;
+            text-overflow: clip;
+        }
+
+        .ns-match-box, .glue-match-box {
+            font-size: 12px;
+            margin-top: 4px;
+            margin-left: 35px; 
+            padding: 6px 12px;
+            border-radius: 4px;
+            display: inline-block;
+        }
+        .match-success {
+            background-color: #e8f5e9;
+            color: #1b5e20;
+            border: 1px solid #c8e6c9;
+        }
+        .match-fail {
+            background-color: #fff3cd;
+            color: #856404;
+            border: 1px solid #ffeeba;
+            animation: pulse 2s infinite;
+        }
+
+        @keyframes pulse {
+            0% { box-shadow: 0 0 0 0 rgba(220, 53, 69, 0.2); }
+            70% { box-shadow: 0 0 0 6px rgba(220, 53, 69, 0); }
+            100% { box-shadow: 0 0 0 0 rgba(220, 53, 69, 0); }
+        }
+
+        .DELEGATED-border { border-left-color: #17a2b8; }
+        .DELEGATED-bg { background-color: #17a2b8; }
+        .SUCCESS-border { border-left-color: #28a745; }
+        .SUCCESS-bg { background-color: #28a745; }
+        .LAME-border { border-left-color: #dc3545; background-color: #fdf2f2; }
+        .LAME-bg { background-color: #dc3545; }
+        .ERROR-border { border-left-color: #6c757d; }
+        .ERROR-bg { background-color: #6c757d; }
+    </style>
+</head>
+<body>
+
+<div class="container">
+    <h2>🌿 DNS委任チェッカー</h2>
+
+    <div class="input-form-container">
+        <div class="input-group">
+            <label for="domain">調査するドメイン名</label>
+            <input type="text" id="domain" placeholder="example.com" onkeydown="checkEnter(event)" autofocus>
+        </div>
+    </div>
+    <button id="start-btn" class="btn-main" onclick="startTrace()">解析スタート</button>
+
+    <div id="result-container" class="result-container">
+        <div style="color: #666; text-align: center; padding-top: 40px;">ドメイン名を入力して解析をスタートしてください。</div>
+    </div>
+</div>
+
+<script>
+const urlParams = new URLSearchParams(window.location.search);
+if (urlParams) {
+    document.getElementById('domain').value = urlParams.get('domain');
+}
+
+function checkEnter(event) {
+    if (event.key === 'Enter') {
+        event.preventDefault();
+        document.getElementById('start-btn').click();
+    }
+}
+
+async function startTrace() {
+    let domain = document.getElementById('domain').value.trim();
+    const container = document.getElementById('result-container');
+
+    try {
+        const urlObj = new URL(domain);
+        if (urlObj && urlObj.hostname) {
+            domain = urlObj.hostname;
+        }
+    } catch (e) {
+    }
+
+    if (!domain) return alert('ドメイン名を入力してください');
+
+    container.innerHTML = '<div style="text-align:center; color:#666; padding-top:40px;">DNSの委任関係、NSレコード、およびGlueレコードを検証中...</div>';
+
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => controller.abort(), 120000);
+
+    try {
+        const response = await fetch('./api/trace', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ domain }),
+            signal: controller.signal
+        });
+
+        clearTimeout(timeoutId);
+
+        const data = await response.json();
+        if (!data.success || !data.log || data.log.length === 0) {
+            container.innerHTML = '<div style="color:red; text-align:center; padding-top:40px;">データの取得に失敗しました。</div>';
+            return;
+        }
+
+        buildIndentView(data.log, container);
+
+    } catch (e) {
+        clearTimeout(timeoutId);
+        if (e.name === 'AbortError') {
+            container.innerHTML = '<div style="color:red; text-align:center; padding-top:40px;">解析がタイムアウトしました（120秒を超えました）。</div>';
+        } else {
+            container.innerHTML = '<div style="color:red; text-align:center; padding-top:40px;">通信エラーが発生しました。Node.jsサーバー側を確認してください。</div>';
+        }
+    }
+}
+
+function buildIndentView(logData, container) {
+    container.innerHTML = ''; 
+
+    const nodesMap = {};
+    const rootNodes = [];
+
+    logData.forEach((item, index) => {
+        const uniqueId = `${item.server}_${index}`;
+        item.id = uniqueId;
+        item.children = [];
+        nodesMap[uniqueId] = item;
+    });
+
+    logData.forEach(item => {
+        if (item.parent === null) {
+            rootNodes.push(item);
+        } else {
+            let foundParent = null;
+            for (let i = logData.indexOf(item) - 1; i >= 0; i--) {
+                if (logData[i].server === item.parent) {
+                    foundParent = logData[i];
+                    break;
+                }
+            }
+            if (foundParent) {
+                foundParent.children.push(item);
+            } else {
+                rootNodes.push(item);
+            }
+        }
+    });
+
+    // 今が第一階層（ルート）かどうかを判定するために checkRoot 引数を追加しました
+    function generateHtmlList(nodes, checkRoot = false) {
+        const ul = document.createElement('ul');
+        
+        nodes.forEach(node => {
+            const li = document.createElement('li');
+
+            let typeKey = 'DELEGATED';
+            if (node.status === 'SUCCESS') typeKey = 'SUCCESS';
+            if (node.status.startsWith('LAME_DELEGATION')) typeKey = 'LAME';
+            if (node.status === 'ERROR' || node.status === 'NETWORK_ERROR') typeKey = 'ERROR';
+
+            const itemBlock = document.createElement('div');
+            itemBlock.className = 'server-item-block';
+
+            const rowDiv = document.createElement('div');
+            // 第一階層（checkRoot が true）の場合はクラス名に「is-root」を付与します
+            rowDiv.className = `server-row ${typeKey}-border ${checkRoot ? 'is-root' : ''}`;
+            rowDiv.innerHTML = `
+                <span class="server-ip">${node.server}</span>
+                <span class="server-status ${typeKey}-bg">${node.status}</span>
+                <span class="server-detail">${node.detail}</span>
+            `;
+
+            itemBlock.appendChild(rowDiv);
+
+            if (node.glueMatch) {
+                const glueMatchDiv = document.createElement('div');
+                glueMatchDiv.className = `glue-match-box ${node.glueMatch.success ? 'match-success' : 'match-fail'}`;
+                glueMatchDiv.innerText = node.glueMatch.msg;
+                itemBlock.appendChild(glueMatchDiv);
+            }
+
+            if (node.nsMatch) {
+                const matchDiv = document.createElement('div');
+                matchDiv.className = `ns-match-box ${node.nsMatch.success ? 'match-success' : 'match-fail'}`;
+                matchDiv.innerText = node.nsMatch.msg;
+                itemBlock.appendChild(matchDiv);
+            }
+
+            li.appendChild(itemBlock);
+
+            if (node.children.length > 0) {
+                // 子階層を呼び出すときは checkRoot を false にして通常記号（└─ ）にします
+                li.appendChild(generateHtmlList(node.children, false));
+            }
+
+            ul.appendChild(li);
+        });
+
+        return ul;
+    }
+
+    const mainListWrapper = document.createElement('div');
+    mainListWrapper.className = 'indent-list';
+
+    // 一番最初の呼び出し時だけ、第2引数に「true」を渡して第一階層であることを明示します
+    mainListWrapper.appendChild(generateHtmlList(rootNodes, true));
+    container.appendChild(mainListWrapper);
+}
+</script>
+</body>
+</html>
+
