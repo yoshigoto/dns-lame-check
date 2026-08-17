@@ -473,8 +473,8 @@ async function traceDomain(domain, servers, dnsResponseCache, parentIP = null, c
                 });
             }
         } else {
-            logEntry.status = 'ERROR';
-            logEntry.detail = `委任先情報 (NSレコード) が見つかりませんでした。`;
+            logEntry.status = 'LAME_DELEGATION_NO_AUTHORITY_NS';
+            logEntry.detail = `権威サーバーが AUTHORITY セクションに NS レコードを持っていません。委任情報が欠落している可能性があります。${cacheNote}`;
             results.push(logEntry);
         }
     }

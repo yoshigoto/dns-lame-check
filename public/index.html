@@ -367,6 +367,7 @@ function buildSummary(logData) {
     const failures = logData.filter(item => item.status && item.status.startsWith('LAME_DELEGATION'));
     const networkErrors = logData.filter(item => item.status === 'NETWORK_ERROR');
     const successCount = logData.filter(item => item.status === 'SUCCESS').length;
+    const missingAuthorityNsCount = logData.filter(item => item.status === 'LAME_DELEGATION_NO_AUTHORITY_NS').length;
     const maxDepthCount = logData.filter(item => item.status === 'LAME_DELEGATION_MAX_DEPTH').length;
 
     const summaryItems = [
@@ -377,8 +378,8 @@ function buildSummary(logData) {
         },
         {
             label: '異常検出',
-            value: failures.length > 0 || maxDepthCount > 0 ? `${failures.length + maxDepthCount} 件の委任異常` : 'なし',
-            tone: failures.length > 0 || maxDepthCount > 0 ? 'warning' : 'success'
+            value: failures.length > 0 || maxDepthCount > 0 || missingAuthorityNsCount > 0 ? `${failures.length + maxDepthCount + missingAuthorityNsCount} 件の委任異常` : 'なし',
+            tone: failures.length > 0 || maxDepthCount > 0 || missingAuthorityNsCount > 0 ? 'warning' : 'success'
         },
         {
             label: '通信エラー',
@@ -393,12 +394,12 @@ function buildSummary(logData) {
     ];
 
     const verdict = document.createElement('div');
-    const verdictText = failures.length > 0 || maxDepthCount > 0
+    const verdictText = failures.length > 0 || maxDepthCount > 0 || missingAuthorityNsCount > 0
         ? '⚠️  異常検出: 委任の不整合あり'
         : networkErrors.length > 0
             ? '🔍  確認中: 通信エラーで信頼性低下'
             : '✅  正常: 委任状態は整っています';
-    verdict.className = `summary-verdict ${failures.length > 0 || maxDepthCount > 0 || networkErrors.length > 0 ? 'warning' : 'success'}`;
+    verdict.className = `summary-verdict ${failures.length > 0 || maxDepthCount > 0 || missingAuthorityNsCount > 0 || networkErrors.length > 0 ? 'warning' : 'success'}`;
     verdict.textContent = verdictText;
 
     const title = document.createElement('div');
