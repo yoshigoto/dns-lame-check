@@ -1,5 +1,6 @@
 import express from 'express';
 import dgram from 'dgram';
+import net from 'net';
 import dnsPacket from 'dns-packet';	// https://github.com/mafintosh/dns-packet
 import promisesDns from 'dns/promises';
 
@@ -39,6 +40,76 @@ function setCacheEntry(dnsResponseCache, cacheKey, value, ttlMs = DNS_CACHE_TTL.
     dnsResponseCache.set(cacheKey, {
         value,
         expiresAt: Date.now() + ttlMs
+    });
+}
+
+function queryDirectlyTCP(domain, serverIp, dnsResponseCache, qType = 'NS') {
+    return new Promise((resolve) => {
+        const cacheKey = `${serverIp}|${qType}|${domain}`;
+        let settled = false;
+
+        const finish = (result) => {
+            if (settled) return;
+            settled = true;
+            clearTimeout(timer);
+            socket.destroy();
+            resolve(result);
+        };
+
+        try {
+            const buf = dnsPacket.encode({
+                type: 'query',
+                id: Math.floor(Math.random() * 65534),
+                questions: [{ type: qType, name: domain }],
+                additionals: [{ type: 'OPT', name: '.', udpPayloadSize: 1232 }]
+            });
+
+            // TCP DNS: 2バイトの長さフィールドを付加
+            const lengthBuf = Buffer.allocUnsafe(2);
+            lengthBuf.writeUInt16BE(buf.length, 0);
+            const tcpBuf = Buffer.concat([lengthBuf, buf]);
+
+            const socket = net.createConnection({ host: serverIp, port: 53 }, () => {
+                socket.write(tcpBuf);
+            });
+
+            const timer = setTimeout(() => {
+                const timeoutResult = { error: 'TIMEOUT' };
+                setCacheEntry(dnsResponseCache, cacheKey, timeoutResult, DNS_CACHE_TTL.timeout);
+                finish(timeoutResult);
+            }, 5000);
+
+            socket.on('error', (err) => {
+                const socketError = { error: 'SOCKET_ERROR', detail: err.message };
+                setCacheEntry(dnsResponseCache, cacheKey, socketError, DNS_CACHE_TTL.transient);
+                finish(socketError);
+            });
+
+            let receivedData = Buffer.alloc(0);
+            socket.on('data', (chunk) => {
+                receivedData = Buffer.concat([receivedData, chunk]);
+
+                // TCPの場合、最初の2バイトが長さ
+                if (receivedData.length >= 2) {
+                    const msgLength = receivedData.readUInt16BE(0);
+                    if (receivedData.length >= msgLength + 2) {
+                        try {
+                            const decoded = dnsPacket.decode(receivedData.slice(2, msgLength + 2));
+                            setCacheEntry(dnsResponseCache, cacheKey, decoded, DNS_CACHE_TTL.success);
+                            finish(decoded);
+                        } catch (e) {
+                            const decodeError = { error: 'DECODE_ERROR', detail: e.message };
+                            setCacheEntry(dnsResponseCache, cacheKey, decodeError, DNS_CACHE_TTL.transient);
+                            finish(decodeError);
+                        }
+                    }
+                }
+            });
+        } catch (e) {
+            const sendError = { error: 'SEND_ERROR', detail: e.message };
+            setCacheEntry(dnsResponseCache, cacheKey, sendError, DNS_CACHE_TTL.transient);
+            finish(sendError);
+        }
     });
 }
 
@@ -102,6 +173,15 @@ function queryDirectly(domain, serverIp, dnsResponseCache, qType = 'NS') {
                 const decoded = dnsPacket.decode(msg);
                 const answers = decoded.answers || [];
                 const authorities = decoded.authorities || [];
+
+                // TCフラグ (Truncated) をチェック（ビット位置 0x0200）
+                const TC_FLAG = 0x0200;
+                const isTruncated = (decoded.flags & TC_FLAG) !== 0;
+
+                if (isTruncated) {
+                    // TCPで再度クエリ送信
+                    return queryDirectlyTCP(domain, serverIp, dnsResponseCache, qType).then(resolve);
+                }
 
                 const hasNsRecord = [...answers, ...authorities].some(r => r.type === 'NS');
                 if (hasNsRecord) {
