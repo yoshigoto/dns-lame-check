@@ -84,6 +84,19 @@
             margin-bottom: 8px;
             letter-spacing: 0.02em;
         }
+        .summary-verdict {
+            font-size: 16px;
+            font-weight: bold;
+            margin: 0 0 12px 0;
+            line-height: 1.5;
+            color: #1f2d3d;
+        }
+        .summary-verdict.warning {
+            color: #b42318;
+        }
+        .summary-verdict.success {
+            color: #1f7a1f;
+        }
         .summary-grid {
             display: grid;
             grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
@@ -93,7 +106,7 @@
             background: rgba(255,255,255,0.7);
             border: 1px solid rgba(52, 152, 219, 0.12);
             border-radius: 6px;
-            padding: 8px 10px;
+            padding: 10px 12px;
             font-size: 12px;
             color: #455a64;
         }
@@ -101,6 +114,21 @@
             display: block;
             color: #1f2d3d;
             margin-bottom: 4px;
+            font-size: 11px;
+            letter-spacing: 0.04em;
+            text-transform: uppercase;
+        }
+        .summary-item.warning {
+            border-color: rgba(220, 53, 69, 0.2);
+            background: rgba(255, 243, 245, 0.9);
+        }
+        .summary-item.info {
+            border-color: rgba(23, 162, 184, 0.2);
+            background: rgba(232, 249, 255, 0.9);
+        }
+        .summary-item.success {
+            border-color: rgba(40, 167, 69, 0.2);
+            background: rgba(232, 245, 233, 0.9);
         }
 
         .result-container {
@@ -337,36 +365,50 @@ function buildSummary(logData) {
     const summaryItems = [
         {
             label: 'ゾーン頂点',
-            value: rootInfo && rootInfo.detail ? rootInfo.detail : '未判定'
+            value: rootInfo && rootInfo.detail ? rootInfo.detail.replace(/^ゾーン頂点は\s*/, '').replace(/\.$/, '') : '未判定',
+            tone: 'info'
         },
         {
-            label: 'LAME 判定',
-            value: failures.length > 0 ? `${failures.length} 件` : 'なし'
+            label: '異常検出',
+            value: failures.length > 0 ? `${failures.length} 件の委任異常` : 'なし',
+            tone: failures.length > 0 ? 'warning' : 'success'
         },
         {
-            label: 'ネットワーク異常',
-            value: networkErrors.length > 0 ? `${networkErrors.length} 件` : 'なし'
+            label: '通信エラー',
+            value: networkErrors.length > 0 ? `${networkErrors.length} 件` : 'なし',
+            tone: networkErrors.length > 0 ? 'warning' : 'success'
         },
         {
-            label: 'SUCCESS 件数',
-            value: successCount
+            label: '正常な委任',
+            value: `${successCount} 件`,
+            tone: successCount > 0 ? 'success' : 'info'
         }
     ];
 
+    const verdict = document.createElement('div');
+    const verdictText = failures.length > 0
+        ? '注意: 委任の不整合が確認されました。'
+        : networkErrors.length > 0
+            ? '確認中: 通信エラーがあり、結果の信頼性が低下しています。'
+            : '正常: 委任状態は概ね整っています。';
+    verdict.className = `summary-verdict ${failures.length > 0 || networkErrors.length > 0 ? 'warning' : 'success'}`;
+    verdict.textContent = verdictText;
+
     const title = document.createElement('div');
     title.className = 'summary-title';
-    title.textContent = '要点サマリー';
+    title.textContent = 'DNS 委任の要点';
 
     const grid = document.createElement('div');
     grid.className = 'summary-grid';
 
     summaryItems.forEach(item => {
         const node = document.createElement('div');
-        node.className = 'summary-item';
+        node.className = `summary-item ${item.tone || 'info'}`;
         node.innerHTML = `<strong>${item.label}</strong><span>${item.value}</span>`;
         grid.appendChild(node);
     });
 
+    summaryPanel.appendChild(verdict);
     summaryPanel.appendChild(title);
     summaryPanel.appendChild(grid);
     summaryPanel.classList.add('visible');
