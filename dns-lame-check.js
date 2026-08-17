@@ -175,8 +175,7 @@ function queryDirectly(domain, serverIp, dnsResponseCache, qType = 'NS') {
                 const answers = decoded.answers || [];
                 const authorities = decoded.authorities || [];
 
-                // TCフラグ (Truncated) をチェック（ビット位置 0x0200）
-                const TC_FLAG = 0x0200;
+                const TC_FLAG = dnsPacket.TRUNCATED_RESPONSE;
                 const isTruncated = (decoded.flags & TC_FLAG) !== 0;
 
                 if (isTruncated) {
