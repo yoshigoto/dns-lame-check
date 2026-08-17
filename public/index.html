@@ -397,14 +397,14 @@ function buildSummary(logData) {
     const verdictText = failures.length > 0 || maxDepthCount > 0 || missingAuthorityNsCount > 0
         ? '⚠️  異常検出: 委任の不整合あり'
         : networkErrors.length > 0
-            ? '🔍  確認中: 通信エラーで信頼性低下'
+            ? '🔍  要確認: 通信エラーで信頼性低下'
             : '✅  正常: 委任状態は整っています';
     verdict.className = `summary-verdict ${failures.length > 0 || maxDepthCount > 0 || missingAuthorityNsCount > 0 || networkErrors.length > 0 ? 'warning' : 'success'}`;
     verdict.textContent = verdictText;
 
     const title = document.createElement('div');
     title.className = 'summary-title';
-    title.textContent = 'DNS 委任の要点';
+    title.textContent = 'DNS委任の要点';
 
     const grid = document.createElement('div');
     grid.className = 'summary-grid';
