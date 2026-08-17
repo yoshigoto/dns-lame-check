@@ -230,20 +230,33 @@ async function getZoneApex(domain, dnsResponseCache) {
     let parentNs = '';
     let zoneApex = '';
     let cdName = false;
-    let errorLogs = [];
+    let explorationLogs = [];
+
+    const pushExplorationLog = (status, detail, server = currentNs, parent = parentNs || null, extra = {}) => {
+        explorationLogs.push({
+            server,
+            parent,
+            status,
+            detail,
+            nsMatch: null,
+            glueMatch: null,
+            ...extra
+        });
+    };
 
     for (let i = 0; i < 10; i++) {
+        const currentServer = currentNs;
+        const currentParent = parentNs || null;
+
         const res = await queryDirectly(domain, currentNs, dnsResponseCache, 'SOA');
 
         if (res.error === 'TIMEOUT' || res.error === 'SEND_ERROR' || res.error === 'SOCKET_ERROR' || res.error === 'DECODE_ERROR') {
-            errorLogs.push({
-                server: currentNs,
-                parent: null,
-                status: 'NETWORK_ERROR',
-                detail: `ゾーン頂点探索中のエラー: ${res.error}${res.detail ? ' - ' + res.detail : ''}`,
-                nsMatch: null,
-                glueMatch: null
-            });
+            pushExplorationLog(
+                'NETWORK_ERROR',
+                `ゾーン頂点探索中のエラー: ${res.error}${res.detail ? ' - ' + res.detail : ''}`,
+                currentNs,
+                currentParent
+            );
             break;
         }
 
@@ -257,23 +270,27 @@ async function getZoneApex(domain, dnsResponseCache) {
                 if (answers.length > 0) {
                     const cnameRecord = answers.find(r => r.type === 'CNAME');
                     if (cnameRecord) {
+                        pushExplorationLog('CNAME_FOUND', `回答に CNAME が含まれており、ゾーン頂点を確定できませんでした。`, currentNs, currentParent);
                         cdName = true;
                         break;
                     }
                     const dnameRecord = answers.find(r => r.type === 'DNAME');
                     if (dnameRecord) {
+                        pushExplorationLog('DNAME_FOUND', `回答に DNAME が含まれており、ゾーン頂点を確定できませんでした。`, currentNs, currentParent);
                         cdName = true;
                         break;
                     }
                     const soaRecord = answers.find(r => r.type === 'SOA');
                     if (soaRecord) {
                         zoneApex = normalizeDnsName(soaRecord.name);
+                        pushExplorationLog('SOA_FOUND', `ゾーン頂点を確定: ${zoneApex}`, currentNs, currentParent);
                         break;
                     }
                 } else if (authorities.length > 0) {
                     const soaRecord = authorities.find(r => r.type === 'SOA');
                     if (soaRecord) {
                         zoneApex = normalizeDnsName(soaRecord.name);
+                        pushExplorationLog('SOA_FOUND', `ゾーン頂点を確定: ${zoneApex}`, currentNs, currentParent);
                         break;
                     }
                 }
@@ -283,6 +300,7 @@ async function getZoneApex(domain, dnsResponseCache) {
                     const soaRecord = authorities.find(r => r.type === 'SOA');
                     if (soaRecord) {
                         zoneApex = normalizeDnsName(soaRecord.name);
+                        pushExplorationLog('NXDOMAIN_SOA_FOUND', `NXDOMAIN に対する SOA からゾーン頂点を確定: ${zoneApex}`, currentNs, currentParent);
                         break;
                     }
                 }
@@ -291,12 +309,21 @@ async function getZoneApex(domain, dnsResponseCache) {
         if (!isAuthoritative && authorities.length > 0) {
             const nsRecord = authorities.find(r => r.type === 'NS');
             if (nsRecord) {
+                const nextNs = normalizeDnsName(nsRecord.data);
+                pushExplorationLog('FOLLOW_DELEGATION', `${currentNs} が ${nextNs} を示しました。`, currentNs, currentParent, { nextServer: nextNs });
                 parentNs = currentNs;
-                currentNs = normalizeDnsName(nsRecord.data);
+                currentNs = nextNs;
             }
         }
     }
-    return { currentNs: currentNs, parentNs: parentNs, zoneApex: zoneApex, cdName: cdName, errorLogs: errorLogs };
+    return {
+        currentNs: currentNs,
+        parentNs: parentNs,
+        zoneApex: zoneApex,
+        cdName: cdName,
+        explorationLogs: explorationLogs,
+        errorLogs: explorationLogs
+    };
 }
 
 async function traceDomain(domain, servers, dnsResponseCache, parentIP = null, currentDepth = 1, expectedNSList = [], parentGlueMap = {}) {
@@ -498,6 +525,7 @@ app.post('/api/trace', async (req, res) => {
 
     try {
         const zoneApexInfo = await getZoneApex(domain, dnsResponseCache);
+        const explorationLog = zoneApexInfo.explorationLogs || zoneApexInfo.errorLogs || [];
         if (zoneApexInfo.zoneApex === '') {
             logEntry.server = zoneApexInfo.parentNs;
             logEntry.parent = zoneApexInfo.parentNs;
@@ -507,21 +535,17 @@ app.post('/api/trace', async (req, res) => {
             } else {
                 logEntry.detail = `${zoneApexInfo.currentNs} から先の探索ができませんでした。`;
             }
-            const fullLog = [...(zoneApexInfo.errorLogs || []), logEntry];
+            const fullLog = [...explorationLog, logEntry];
             res.json({ success: true, log: fullLog });
         } else if (zoneApexInfo.parentNs !== '') {
-            logEntry.server = zoneApexInfo.parentNs;
-            logEntry.parent = zoneApexInfo.parentNs;
-            logEntry.status = 'INFO';
-            logEntry.detail = `ゾーン頂点は ${zoneApexInfo.zoneApex} です。`;
-            const fullLog = [...(zoneApexInfo.errorLogs || []), logEntry];
             const serverList = new Array(zoneApexInfo.parentNs);
+            const fullLog = [...explorationLog];
             const traceLog = await traceDomain(zoneApexInfo.zoneApex, serverList, dnsResponseCache, null, 1, [], {});
             fullLog.push(...traceLog);
             res.json({ success: true, log: fullLog });
         } else {
             const serverList = new Array('a.root-servers.net');
-            const fullLog = [...(zoneApexInfo.errorLogs || [])];
+            const fullLog = [...explorationLog];
             const traceLog = await traceDomain(zoneApexInfo.zoneApex, serverList, dnsResponseCache, null, 1, [], {});
             fullLog.push(...traceLog);
             res.json({ success: true, log: fullLog });
