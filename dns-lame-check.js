@@ -47,29 +47,25 @@ function queryDirectlyTCP(domain, serverIp, dnsResponseCache, qType = 'NS') {
     return new Promise((resolve) => {
         const cacheKey = `${serverIp}|${qType}|${domain}`;
         let settled = false;
+        let socket = null;
 
         const finish = (result) => {
             if (settled) return;
             settled = true;
             clearTimeout(timer);
-            socket.destroy();
+            if (socket) socket.destroy();
             resolve(result);
         };
 
         try {
-            const buf = dnsPacket.encode({
+            const tcpBuf = dnsPacket.streamEncode({
                 type: 'query',
                 id: Math.floor(Math.random() * 65534),
                 questions: [{ type: qType, name: domain }],
                 additionals: [{ type: 'OPT', name: '.', udpPayloadSize: 1232 }]
             });
 
-            // TCP DNS: 2バイトの長さフィールドを付加
-            const lengthBuf = Buffer.allocUnsafe(2);
-            lengthBuf.writeUInt16BE(buf.length, 0);
-            const tcpBuf = Buffer.concat([lengthBuf, buf]);
-
-            const socket = net.createConnection({ host: serverIp, port: 53 }, () => {
+            socket = net.createConnection({ host: serverIp, port: 53 }, () => {
                 socket.write(tcpBuf);
             });
 
@@ -89,19 +85,21 @@ function queryDirectlyTCP(domain, serverIp, dnsResponseCache, qType = 'NS') {
             socket.on('data', (chunk) => {
                 receivedData = Buffer.concat([receivedData, chunk]);
 
-                // TCPの場合、最初の2バイトが長さ
-                if (receivedData.length >= 2) {
+                while (receivedData.length >= 2) {
                     const msgLength = receivedData.readUInt16BE(0);
-                    if (receivedData.length >= msgLength + 2) {
-                        try {
-                            const decoded = dnsPacket.decode(receivedData.slice(2, msgLength + 2));
-                            setCacheEntry(dnsResponseCache, cacheKey, decoded, DNS_CACHE_TTL.success);
-                            finish(decoded);
-                        } catch (e) {
-                            const decodeError = { error: 'DECODE_ERROR', detail: e.message };
-                            setCacheEntry(dnsResponseCache, cacheKey, decodeError, DNS_CACHE_TTL.transient);
-                            finish(decodeError);
-                        }
+                    if (receivedData.length < msgLength + 2) break;
+
+                    try {
+                        const decoded = dnsPacket.streamDecode(receivedData);
+                        if (!decoded) break;
+
+                        receivedData = receivedData.slice(2 + msgLength);
+                        setCacheEntry(dnsResponseCache, cacheKey, decoded, DNS_CACHE_TTL.success);
+                        return finish(decoded);
+                    } catch (e) {
+                        const decodeError = { error: 'DECODE_ERROR', detail: e.message };
+                        setCacheEntry(dnsResponseCache, cacheKey, decodeError, DNS_CACHE_TTL.transient);
+                        return finish(decodeError);
                     }
                 }
             });
