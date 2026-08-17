@@ -527,28 +527,15 @@ app.post('/api/trace', async (req, res) => {
         const zoneApexInfo = await getZoneApex(domain, dnsResponseCache);
         const explorationLog = zoneApexInfo.explorationLogs || zoneApexInfo.errorLogs || [];
         if (zoneApexInfo.zoneApex === '') {
-            logEntry.server = zoneApexInfo.parentNs;
-            logEntry.parent = zoneApexInfo.parentNs;
-            logEntry.status = 'ERROR';
-            if (zoneApexInfo.cdName) {
-                logEntry.detail = 'このドメイン名は CNAME/DNAME のためゾーン頂点を特定できませんでした。';
-            } else {
-                logEntry.detail = `${zoneApexInfo.currentNs} から先の探索ができませんでした。`;
-            }
-            const fullLog = [...explorationLog, logEntry];
-            res.json({ success: true, log: fullLog });
+            res.json({ success: true, log: [...explorationLog] });
         } else if (zoneApexInfo.parentNs !== '') {
-            const fullLog = [...explorationLog];
             const serverList = new Array(zoneApexInfo.parentNs);
             const traceLog = await traceDomain(zoneApexInfo.zoneApex, serverList, dnsResponseCache, null, 1, [], {});
-            fullLog.push(...traceLog);
-            res.json({ success: true, log: fullLog });
+            res.json({ success: true, log: [...explorationLog, ...traceLog] });
         } else {
             const serverList = new Array('a.root-servers.net');
-            const fullLog = [...explorationLog];
             const traceLog = await traceDomain(zoneApexInfo.zoneApex, serverList, dnsResponseCache, null, 1, [], {});
-            fullLog.push(...traceLog);
-            res.json({ success: true, log: fullLog });
+            res.json({ success: true, log: [...explorationLog, ...traceLog] });
         }
     } catch (error) {
         res.status(500).json({ success: false, error: error.message });
