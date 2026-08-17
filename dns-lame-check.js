@@ -48,11 +48,12 @@ function queryDirectlyTCP(domain, serverIp, dnsResponseCache, qType = 'NS') {
         const cacheKey = `${serverIp}|${qType}|${domain}`;
         let settled = false;
         let socket = null;
+        let timer = null;
 
         const finish = (result) => {
             if (settled) return;
             settled = true;
-            clearTimeout(timer);
+            if (timer) clearTimeout(timer);
             if (socket) socket.destroy();
             resolve(result);
         };
@@ -70,13 +71,13 @@ function queryDirectlyTCP(domain, serverIp, dnsResponseCache, qType = 'NS') {
             });
 
             const timer = setTimeout(() => {
-                const timeoutResult = { error: 'TIMEOUT' };
+                const timeoutResult = { error: 'TIMEOUT', transport: 'tcp' };
                 setCacheEntry(dnsResponseCache, cacheKey, timeoutResult, DNS_CACHE_TTL.timeout);
                 finish(timeoutResult);
             }, 5000);
 
             socket.on('error', (err) => {
-                const socketError = { error: 'SOCKET_ERROR', detail: err.message };
+                const socketError = { error: 'SOCKET_ERROR', detail: err.message, transport: 'tcp' };
                 setCacheEntry(dnsResponseCache, cacheKey, socketError, DNS_CACHE_TTL.transient);
                 finish(socketError);
             });
@@ -94,17 +95,18 @@ function queryDirectlyTCP(domain, serverIp, dnsResponseCache, qType = 'NS') {
                         if (!decoded) break;
 
                         receivedData = receivedData.slice(2 + msgLength);
-                        setCacheEntry(dnsResponseCache, cacheKey, decoded, DNS_CACHE_TTL.success);
-                        return finish(decoded);
+                        const tcpSuccess = { ...decoded, transport: 'tcp' };
+                        setCacheEntry(dnsResponseCache, cacheKey, tcpSuccess, DNS_CACHE_TTL.success);
+                        return finish(tcpSuccess);
                     } catch (e) {
-                        const decodeError = { error: 'DECODE_ERROR', detail: e.message };
+                        const decodeError = { error: 'DECODE_ERROR', detail: e.message, transport: 'tcp' };
                         setCacheEntry(dnsResponseCache, cacheKey, decodeError, DNS_CACHE_TTL.transient);
                         return finish(decodeError);
                     }
                 }
             });
         } catch (e) {
-            const sendError = { error: 'SEND_ERROR', detail: e.message };
+            const sendError = { error: 'SEND_ERROR', detail: e.message, transport: 'tcp' };
             setCacheEntry(dnsResponseCache, cacheKey, sendError, DNS_CACHE_TTL.transient);
             finish(sendError);
         }
@@ -124,12 +126,13 @@ function queryDirectly(domain, serverIp, dnsResponseCache, qType = 'NS') {
         const socketType = isIPv6(serverIp) ? 'udp6' : 'udp4';
         const client = dgram.createSocket(socketType);
         let settled = false;
+        let timer = null;
 
         const finish = (result) => {
             if (settled) return;
             settled = true;
-            clearTimeout(timer);
-            client.close();
+            if (timer) clearTimeout(timer);
+            try { client.close(); } catch (e) {}
             resolve(result);
         };
 
@@ -143,25 +146,25 @@ function queryDirectly(domain, serverIp, dnsResponseCache, qType = 'NS') {
 
             client.send(buf, 0, buf.length, 53, serverIp, (err) => {
                 if (err) {
-                    const sendError = { error: 'SEND_ERROR', detail: err.message };
+                    const sendError = { error: 'SEND_ERROR', detail: err.message, transport: 'udp' };
                     setCacheEntry(dnsResponseCache, cacheKey, sendError, DNS_CACHE_TTL.transient);
                     return finish(sendError);
                 }
             });
         } catch (e) {
-            const sendError = { error: 'SEND_ERROR', detail: e.message };
+            const sendError = { error: 'SEND_ERROR', detail: e.message, transport: 'udp' };
             setCacheEntry(dnsResponseCache, cacheKey, sendError, DNS_CACHE_TTL.transient);
             return finish(sendError);
         }
 
-        const timer = setTimeout(() => {
-            const timeoutResult = { error: 'TIMEOUT' };
+        timer = setTimeout(() => {
+            const timeoutResult = { error: 'TIMEOUT', transport: 'udp' };
             setCacheEntry(dnsResponseCache, cacheKey, timeoutResult, DNS_CACHE_TTL.timeout);
             return finish(timeoutResult);
         }, 5000);
 
         client.on('error', (err) => {
-            const socketError = { error: 'SOCKET_ERROR', detail: err.message };
+            const socketError = { error: 'SOCKET_ERROR', detail: err.message, transport: 'udp' };
             setCacheEntry(dnsResponseCache, cacheKey, socketError, DNS_CACHE_TTL.transient);
             return finish(socketError);
         });
@@ -177,8 +180,28 @@ function queryDirectly(domain, serverIp, dnsResponseCache, qType = 'NS') {
                 const isTruncated = (decoded.flags & TC_FLAG) !== 0;
 
                 if (isTruncated) {
-                    // TCPで再度クエリ送信
-                    return queryDirectlyTCP(domain, serverIp, dnsResponseCache, qType).then(resolve);
+                    const fallback = () => queryDirectlyTCP(domain, serverIp, dnsResponseCache, qType)
+                        .then((tcpResult) => {
+                            return finish({
+                                ...tcpResult,
+                                transport: tcpResult?.transport || 'tcp',
+                                retryFrom: 'udp-truncated',
+                                isFallback: true
+                            });
+                        })
+                        .catch((err) => {
+                            return finish({
+                                error: 'TCP_FALLBACK_ERROR',
+                                detail: err?.message || 'TCP fallback failed',
+                                transport: 'tcp',
+                                retryFrom: 'udp-truncated',
+                                isFallback: true
+                            });
+                        });
+
+                    if (timer) clearTimeout(timer);
+                    try { client.close(); } catch (e) {}
+                    return fallback();
                 }
 
                 const hasNsRecord = [...answers, ...authorities].some(r => r.type === 'NS');
@@ -186,9 +209,9 @@ function queryDirectly(domain, serverIp, dnsResponseCache, qType = 'NS') {
                     setCacheEntry(dnsResponseCache, cacheKey, decoded, DNS_CACHE_TTL.success);
                 }
 
-                return finish(decoded);
+                return finish({ ...decoded, transport: 'udp' });
             } catch (e) {
-                const decodeError = { error: 'DECODE_ERROR', detail: e.message };
+                const decodeError = { error: 'DECODE_ERROR', detail: e.message, transport: 'udp' };
                 setCacheEntry(dnsResponseCache, cacheKey, decodeError, DNS_CACHE_TTL.transient);
                 return finish(decodeError);
             }
