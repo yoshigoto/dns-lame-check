@@ -11,13 +11,44 @@ function isIPv6(ip) {
     return ip.includes(':');
 }
 
+function normalizeDnsName(name) {
+    return String(name || '').trim().toLowerCase().replace(/\.$/, '');
+}
+
+const DNS_CACHE_TTL = {
+    success: 30000,
+    transient: 2000,
+    timeout: 3000
+};
+
+function getCacheEntry(dnsResponseCache, cacheKey) {
+    const entry = dnsResponseCache.get(cacheKey);
+    if (!entry) {
+        return null;
+    }
+
+    if (entry.expiresAt <= Date.now()) {
+        dnsResponseCache.delete(cacheKey);
+        return null;
+    }
+
+    return entry.value;
+}
+
+function setCacheEntry(dnsResponseCache, cacheKey, value, ttlMs = DNS_CACHE_TTL.success) {
+    dnsResponseCache.set(cacheKey, {
+        value,
+        expiresAt: Date.now() + ttlMs
+    });
+}
+
 function queryDirectly(domain, serverIp, dnsResponseCache, qType = 'NS') {
     return new Promise((resolve) => {
         const cacheKey = `${serverIp}|${qType}|${domain}`;
 
         // 以前に同じサーバー・タイプ・ドメインに対して問い合わせ済みなら、即時復元
-        if (dnsResponseCache.has(cacheKey)) {
-            const cachedResult = dnsResponseCache.get(cacheKey);
+        const cachedResult = getCacheEntry(dnsResponseCache, cacheKey);
+        if (cachedResult) {
             return resolve({ ...cachedResult, isCached: true });
         }
 
@@ -44,25 +75,25 @@ function queryDirectly(domain, serverIp, dnsResponseCache, qType = 'NS') {
             client.send(buf, 0, buf.length, 53, serverIp, (err) => {
                 if (err) {
                     const sendError = { error: 'SEND_ERROR', detail: err.message };
-                    dnsResponseCache.set(cacheKey, sendError);
+                    setCacheEntry(dnsResponseCache, cacheKey, sendError, DNS_CACHE_TTL.transient);
                     return finish(sendError);
                 }
             });
         } catch (e) {
             const sendError = { error: 'SEND_ERROR', detail: e.message };
-            dnsResponseCache.set(cacheKey, sendError);
+            setCacheEntry(dnsResponseCache, cacheKey, sendError, DNS_CACHE_TTL.transient);
             return finish(sendError);
         }
 
         const timer = setTimeout(() => {
             const timeoutResult = { error: 'TIMEOUT' };
-            dnsResponseCache.set(cacheKey, timeoutResult);
+            setCacheEntry(dnsResponseCache, cacheKey, timeoutResult, DNS_CACHE_TTL.timeout);
             return finish(timeoutResult);
         }, 5000);
 
         client.on('error', (err) => {
             const socketError = { error: 'SOCKET_ERROR', detail: err.message };
-            dnsResponseCache.set(cacheKey, socketError);
+            setCacheEntry(dnsResponseCache, cacheKey, socketError, DNS_CACHE_TTL.transient);
             return finish(socketError);
         });
 
@@ -74,13 +105,13 @@ function queryDirectly(domain, serverIp, dnsResponseCache, qType = 'NS') {
 
                 const hasNsRecord = [...answers, ...authorities].some(r => r.type === 'NS');
                 if (hasNsRecord) {
-                    dnsResponseCache.set(cacheKey, decoded);
+                    setCacheEntry(dnsResponseCache, cacheKey, decoded, DNS_CACHE_TTL.success);
                 }
 
                 return finish(decoded);
             } catch (e) {
                 const decodeError = { error: 'DECODE_ERROR', detail: e.message };
-                dnsResponseCache.set(cacheKey, decodeError);
+                setCacheEntry(dnsResponseCache, cacheKey, decodeError, DNS_CACHE_TTL.transient);
                 return finish(decodeError);
             }
         });
@@ -104,7 +135,7 @@ async function getZoneApex(domain, dnsResponseCache) {
     for (let i = 0; i < 10; i++) {
         const res = await queryDirectly(domain, currentNs, dnsResponseCache, 'SOA');
 
-        if (res.error === 'TIMEOUT' || res.error === 'SEND_ERROR' || res.error === 'DECODE_ERROR') {
+        if (res.error === 'TIMEOUT' || res.error === 'SEND_ERROR' || res.error === 'SOCKET_ERROR' || res.error === 'DECODE_ERROR') {
             status = res.error;
             continue;
         }
@@ -130,13 +161,13 @@ async function getZoneApex(domain, dnsResponseCache) {
                     }
                     const soaRecord = answers.find(r => r.type === 'SOA');
                     if (soaRecord) {
-                        zoneApex = soaRecord.name;
+                        zoneApex = normalizeDnsName(soaRecord.name);
                         break;
                     }
                 } else if (authorities.length > 0) {
                     const soaRecord = authorities.find(r => r.type === 'SOA');
                     if (soaRecord) {
-                        zoneApex = soaRecord.name;
+                        zoneApex = normalizeDnsName(soaRecord.name);
                         break;
                     }
                 }
@@ -145,7 +176,7 @@ async function getZoneApex(domain, dnsResponseCache) {
                 if (authorities.length > 0) {
                     const soaRecord = authorities.find(r => r.type === 'SOA');
                     if (soaRecord) {
-                        zoneApex = soaRecord.name;
+                        zoneApex = normalizeDnsName(soaRecord.name);
                         break;
                     }
                 }
@@ -155,7 +186,7 @@ async function getZoneApex(domain, dnsResponseCache) {
             const nsRecord = authorities.find(r => r.type === 'NS');
             if (nsRecord) {
                 parentNs = currentNs;
-                currentNs = nsRecord.data;
+                currentNs = normalizeDnsName(nsRecord.data);
             }
         }
     }
@@ -189,7 +220,7 @@ async function traceDomain(domain, servers, dnsResponseCache, parentIP = null, c
             continue; 
         }
 
-        if (res.error === 'SEND_ERROR' || res.error === 'DECODE_ERROR') {
+        if (res.error === 'SEND_ERROR' || res.error === 'SOCKET_ERROR' || res.error === 'DECODE_ERROR') {
             logEntry.status = 'NETWORK_ERROR';
             logEntry.detail = `エラー: ${res.detail}`;
             results.push(logEntry);
@@ -214,8 +245,8 @@ async function traceDomain(domain, servers, dnsResponseCache, parentIP = null, c
         if (isAuthoritative && answers.length > 0) {
             logEntry.status = 'SUCCESS';
 
-            const childNSList = answers.filter(r => r.type === 'NS').map(r => r.data.toLowerCase().replace(/\.$/, ''));
-            const parentNSListNormalized = expectedNSList.map(ns => ns.toLowerCase().replace(/\.$/, ''));
+            const childNSList = answers.filter(r => r.type === 'NS').map(r => normalizeDnsName(r.data));
+            const parentNSListNormalized = expectedNSList.map(ns => normalizeDnsName(ns));
 
             if (childNSList.length > 0 && parentNSListNormalized.length > 0) {
                 const isMatch = childNSList.length === parentNSListNormalized.length &&
@@ -285,7 +316,7 @@ async function traceDomain(domain, servers, dnsResponseCache, parentIP = null, c
             logEntry.detail = `AUTHORITY SECTION に ${nsRecords.length} 個の NSレコード。IPアドレスを以下に列挙。${cacheNote}`;
             results.push(logEntry);
 
-            const currentNSNames = nsRecords.map(r => r.data);
+            const currentNSNames = nsRecords.map(r => normalizeDnsName(r.data));
 
             let nextGlueMap = {};
             let nextServerIPs = [];
