@@ -66,6 +66,43 @@
         }
 
         /* 横スクロール・自動改行防止付き結果コンテナ */
+        .summary-panel {
+            margin-bottom: 18px;
+            padding: 14px 16px;
+            border: 1px solid #dfeaf7;
+            border-radius: 8px;
+            background: linear-gradient(135deg, #f7fbff 0%, #eef6ff 100%);
+            display: none;
+        }
+        .summary-panel.visible {
+            display: block;
+        }
+        .summary-title {
+            font-size: 13px;
+            font-weight: bold;
+            color: #2c3e50;
+            margin-bottom: 8px;
+            letter-spacing: 0.02em;
+        }
+        .summary-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+            gap: 10px;
+        }
+        .summary-item {
+            background: rgba(255,255,255,0.7);
+            border: 1px solid rgba(52, 152, 219, 0.12);
+            border-radius: 6px;
+            padding: 8px 10px;
+            font-size: 12px;
+            color: #455a64;
+        }
+        .summary-item strong {
+            display: block;
+            color: #1f2d3d;
+            margin-bottom: 4px;
+        }
+
         .result-container {
             background: #fafafa;
             border: 1px solid #e0e0e0;
@@ -218,6 +255,7 @@
         <button id="start-btn" class="btn-main" type="submit">解析スタート</button>
     </form>
 
+    <div id="summary-panel" class="summary-panel"></div>
     <div id="result-container" class="result-container">
         <div style="color: #666; text-align: center; padding-top: 40px;">ドメイン名を入力して解析をスタートしてください。</div>
     </div>
@@ -284,8 +322,59 @@ async function startTrace() {
     }
 }
 
+function buildSummary(logData) {
+    const summaryPanel = document.getElementById('summary-panel');
+    summaryPanel.innerHTML = '';
+    summaryPanel.classList.remove('visible');
+
+    if (!logData || logData.length === 0) return;
+
+    const rootInfo = logData.find(item => item.status === 'INFO') || logData[0];
+    const failures = logData.filter(item => item.status && item.status.startsWith('LAME_DELEGATION'));
+    const networkErrors = logData.filter(item => item.status === 'NETWORK_ERROR');
+    const successCount = logData.filter(item => item.status === 'SUCCESS').length;
+
+    const summaryItems = [
+        {
+            label: 'ゾーン頂点',
+            value: rootInfo && rootInfo.detail ? rootInfo.detail : '未判定'
+        },
+        {
+            label: 'LAME 判定',
+            value: failures.length > 0 ? `${failures.length} 件` : 'なし'
+        },
+        {
+            label: 'ネットワーク異常',
+            value: networkErrors.length > 0 ? `${networkErrors.length} 件` : 'なし'
+        },
+        {
+            label: 'SUCCESS 件数',
+            value: successCount
+        }
+    ];
+
+    const title = document.createElement('div');
+    title.className = 'summary-title';
+    title.textContent = '要点サマリー';
+
+    const grid = document.createElement('div');
+    grid.className = 'summary-grid';
+
+    summaryItems.forEach(item => {
+        const node = document.createElement('div');
+        node.className = 'summary-item';
+        node.innerHTML = `<strong>${item.label}</strong><span>${item.value}</span>`;
+        grid.appendChild(node);
+    });
+
+    summaryPanel.appendChild(title);
+    summaryPanel.appendChild(grid);
+    summaryPanel.classList.add('visible');
+}
+
 function buildIndentView(logData, container) {
     container.innerHTML = ''; 
+    buildSummary(logData);
 
     const nodesMap = {};
     const rootNodes = [];
