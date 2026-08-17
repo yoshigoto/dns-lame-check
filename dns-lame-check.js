@@ -244,7 +244,7 @@ async function getZoneApex(domain, dnsResponseCache) {
                 nsMatch: null,
                 glueMatch: null
             });
-            continue;
+            break;
         }
 
         const AUTHORITATIVE_ANSWER = dnsPacket.AUTHORITATIVE_ANSWER || 1024;
