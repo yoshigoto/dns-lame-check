@@ -13,16 +13,25 @@ function isIPv6(ip) {
 
 function queryDirectly(domain, serverIp, dnsResponseCache, qType = 'NS') {
     return new Promise((resolve) => {
-        // もし以前にこのサーバーへの問い合わせ実績があれば、通信せずキャッシュから即座に復元
-        if (dnsResponseCache.has(serverIp)) {
-            const cachedResult = dnsResponseCache.get(serverIp);
+        const cacheKey = `${serverIp}|${qType}|${domain}`;
+
+        // 以前に同じサーバー・タイプ・ドメインに対して問い合わせ済みなら、即時復元
+        if (dnsResponseCache.has(cacheKey)) {
+            const cachedResult = dnsResponseCache.get(cacheKey);
             return resolve({ ...cachedResult, isCached: true });
         }
 
         const socketType = isIPv6(serverIp) ? 'udp6' : 'udp4';
         const client = dgram.createSocket(socketType);
-        
-        const AUTHORITATIVE_ANSWER = dnsPacket.AUTHORITATIVE_ANSWER || 1024; 
+        let settled = false;
+
+        const finish = (result) => {
+            if (settled) return;
+            settled = true;
+            clearTimeout(timer);
+            client.close();
+            resolve(result);
+        };
 
         try {
             const buf = dnsPacket.encode({
@@ -33,44 +42,46 @@ function queryDirectly(domain, serverIp, dnsResponseCache, qType = 'NS') {
             });
 
             client.send(buf, 0, buf.length, 53, serverIp, (err) => {
-                if (err) { 
-                    client.close(); 
-                    resolve({ error: 'SEND_ERROR', detail: err.message }); 
+                if (err) {
+                    const sendError = { error: 'SEND_ERROR', detail: err.message };
+                    dnsResponseCache.set(cacheKey, sendError);
+                    return finish(sendError);
                 }
             });
         } catch (e) {
-            client.close();
-            resolve({ error: 'SEND_ERROR', detail: e.message });
+            const sendError = { error: 'SEND_ERROR', detail: e.message };
+            dnsResponseCache.set(cacheKey, sendError);
+            return finish(sendError);
         }
 
         const timer = setTimeout(() => {
-            client.close();
             const timeoutResult = { error: 'TIMEOUT' };
-            dnsResponseCache.set(serverIp, timeoutResult);
-            resolve(timeoutResult);
+            dnsResponseCache.set(cacheKey, timeoutResult);
+            return finish(timeoutResult);
         }, 5000);
 
+        client.on('error', (err) => {
+            const socketError = { error: 'SOCKET_ERROR', detail: err.message };
+            dnsResponseCache.set(cacheKey, socketError);
+            return finish(socketError);
+        });
+
         client.on('message', (msg) => {
-            clearTimeout(timer);
-            client.close();
             try {
                 const decoded = dnsPacket.decode(msg);
-                // ANSWER SECTION に NS があったらキャッシュに登録
                 const answers = decoded.answers || [];
-                let nsRecord = answers.find(r => r.type === 'NS');
-                if (nsRecord) {
-                    dnsResponseCache.set(serverIp, decoded);
-                }
-                // AUTHORITY SECTION に NS があったらキャッシュに登録
                 const authorities = decoded.authorities || [];
-                nsRecord = authorities.find(r => r.type === 'NS');
-                if (nsRecord) {
-                    dnsResponseCache.set(serverIp, decoded);
+
+                const hasNsRecord = [...answers, ...authorities].some(r => r.type === 'NS');
+                if (hasNsRecord) {
+                    dnsResponseCache.set(cacheKey, decoded);
                 }
-                // DNSメッセージを返す
-                resolve(decoded);
+
+                return finish(decoded);
             } catch (e) {
-                resolve({ error: 'DECODE_ERROR', detail: e.message });
+                const decodeError = { error: 'DECODE_ERROR', detail: e.message };
+                dnsResponseCache.set(cacheKey, decodeError);
+                return finish(decodeError);
             }
         });
     });
@@ -87,16 +98,17 @@ async function getZoneApex(domain, dnsResponseCache) {
     let currentNs = 'a.root-servers.net';
     let parentNs = '';
     let zoneApex = '';
-    let rcode = '';
+    let status = '';
     let cdName = false;
 
     for (let i = 0; i < 10; i++) {
         const res = await queryDirectly(domain, currentNs, dnsResponseCache, 'SOA');
 
         if (res.error === 'TIMEOUT' || res.error === 'SEND_ERROR' || res.error === 'DECODE_ERROR') {
+            status = res.error;
             continue;
         }
-        rcode = res.rcode;
+        status = res.rcode;
 
         const AUTHORITATIVE_ANSWER = dnsPacket.AUTHORITATIVE_ANSWER || 1024;
         const isAuthoritative = (res.flags & AUTHORITATIVE_ANSWER) !== 0;
@@ -147,7 +159,7 @@ async function getZoneApex(domain, dnsResponseCache) {
             }
         }
     }
-    return { currentNs: currentNs, parentNs: parentNs, zoneApex: zoneApex, rcode: rcode, cdName: cdName };
+    return { currentNs: currentNs, parentNs: parentNs, zoneApex: zoneApex, status: status, cdName: cdName };
 }
 
 async function traceDomain(domain, servers, dnsResponseCache, parentIP = null, currentDepth = 1, expectedNSList = [], parentGlueMap = {}) {
@@ -346,7 +358,7 @@ app.post('/api/trace', async (req, res) => {
             if (zoneApexInfo.cdName) {
                 logEntry.detail = 'このドメイン名は CNAME/DNAME のためゾーン頂点を特定できませんでした。';
             } else {
-                logEntry.detail = `${zoneApexInfo.currentNs} から先の探索ができませんでした。(rcode: ${zoneApexInfo.rcode})`;
+                logEntry.detail = `${zoneApexInfo.currentNs} から先の探索ができませんでした。(status: ${zoneApexInfo.status})`;
             }
             const fullLog = new Array(logEntry);
             res.json({ success: true, log: fullLog });
