@@ -363,7 +363,12 @@ function buildSummary(logData) {
 
     if (!logData || logData.length === 0) return;
 
-    const rootInfo = logData.find(item => item.status === 'INFO') || logData[0];
+    const rootInfo = logData.find(item => item.status === 'INFO') || logData.find(item => item.detail && item.detail.includes('ゾーン頂点を確定')) || logData[0];
+    const apexName = rootInfo && rootInfo.detail && rootInfo.detail.includes('ゾーン頂点を確定:')
+        ? rootInfo.detail.replace(/^.*ゾーン頂点を確定:\s*/, '').replace(/\.$/, '')
+        : (rootInfo && rootInfo.detail && rootInfo.detail.includes('ゾーン頂点は'))
+            ? rootInfo.detail.replace(/^.*ゾーン頂点は\s*/, '').replace(/\.$/, '')
+            : '未判定';
     const failures = logData.filter(item => item.status && item.status.startsWith('LAME_DELEGATION'));
     const networkErrors = logData.filter(item => item.status === 'NETWORK_ERROR');
     const successCount = logData.filter(item => item.status === 'SUCCESS').length;
@@ -373,7 +378,7 @@ function buildSummary(logData) {
     const summaryItems = [
         {
             label: 'ゾーン頂点',
-            value: rootInfo && rootInfo.detail ? rootInfo.detail.replace(/^ゾーン頂点は\s*/, '').replace(/\.$/, '') : '未判定',
+            value: apexName,
             tone: 'info'
         },
         {

@@ -538,8 +538,8 @@ app.post('/api/trace', async (req, res) => {
             const fullLog = [...explorationLog, logEntry];
             res.json({ success: true, log: fullLog });
         } else if (zoneApexInfo.parentNs !== '') {
-            const serverList = new Array(zoneApexInfo.parentNs);
             const fullLog = [...explorationLog];
+            const serverList = new Array(zoneApexInfo.parentNs);
             const traceLog = await traceDomain(zoneApexInfo.zoneApex, serverList, dnsResponseCache, null, 1, [], {});
             fullLog.push(...traceLog);
             res.json({ success: true, log: fullLog });
