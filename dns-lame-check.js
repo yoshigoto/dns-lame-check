@@ -302,7 +302,17 @@ async function getZoneApex(domain, dnsResponseCache) {
 
 async function traceDomain(domain, servers, dnsResponseCache, parentIP = null, currentDepth = 1, expectedNSList = [], parentGlueMap = {}) {
     let results = [];
-    if (currentDepth > 10) return results;
+    if (currentDepth > 10) {
+        results.push({
+            server: servers[0] || '',
+            parent: parentIP,
+            status: 'LAME_DELEGATION_MAX_DEPTH',
+            detail: `委任チェーンが上限 (${10}) に達したため、以降の追跡を打ち切りました。`,
+            nsMatch: null,
+            glueMatch: null
+        });
+        return results;
+    }
 
     for (const serverIp of servers) {
         let logEntry = {
