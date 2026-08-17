@@ -22,11 +22,15 @@
 
         .input-form-container {
             display: flex;
+            align-items: flex-end;
+            gap: 16px;
             margin-bottom: 20px;
-            flex-direction: column;
-            gap: 20px;
+            flex-wrap: wrap;
         }
-        .input-group { width: 100%; }
+        .input-group {
+            flex: 1 1 560px;
+            min-width: 260px;
+        }
         label {
             display: block;
             margin-bottom: 8px;
@@ -47,8 +51,7 @@
         }
 
         button.btn-main {
-            padding: 8px 25px;
-            margin-bottom: 20px;
+            padding: 11px 24px;
             background: #007bff;
             color: white;
             border: none;
@@ -56,7 +59,7 @@
             cursor: pointer;
             font-size: 16px;
             font-weight: bold;
-            margin-bottom: 20px;
+            white-space: nowrap;
         }
         button.btn-main:hover {
             background: #0056b3;
@@ -123,11 +126,15 @@
             font-family: monospace;
         }
 
-        /* JavaScriptから「is-root」クラスを直接付与された行だけ、確実に🚩に変えます */
         .server-row.is-root::before {
             content: "🚩 ";
             font-family: sans-serif;
             margin-right: 8px;
+        }
+
+        .server-row.is-root {
+            border-left-color: #ff9800;
+            background: #fff7e6;
         }
 
         .server-ip {
@@ -188,6 +195,14 @@
         .LAME-bg { background-color: #dc3545; }
         .ERROR-border { border-left-color: #6c757d; }
         .ERROR-bg { background-color: #6c757d; }
+
+        .status-badge {
+            display: inline-flex;
+            align-items: center;
+            justify-content: center;
+            min-width: 94px;
+            text-align: center;
+        }
     </style>
 </head>
 <body>
@@ -195,13 +210,13 @@
 <div class="container">
     <h2>🌿 DNS委任チェッカー</h2>
 
-    <div class="input-form-container">
+    <form class="input-form-container" onsubmit="event.preventDefault(); startTrace();">
         <div class="input-group">
             <label for="domain">調査するドメイン名</label>
             <input type="text" id="domain" placeholder="example.com" onkeydown="checkEnter(event)" autofocus>
         </div>
-    </div>
-    <button id="start-btn" class="btn-main" onclick="startTrace()">解析スタート</button>
+        <button id="start-btn" class="btn-main" type="submit">解析スタート</button>
+    </form>
 
     <div id="result-container" class="result-container">
         <div style="color: #666; text-align: center; padding-top: 40px;">ドメイン名を入力して解析をスタートしてください。</div>
@@ -210,8 +225,9 @@
 
 <script>
 const urlParams = new URLSearchParams(window.location.search);
-if (urlParams) {
-    document.getElementById('domain').value = urlParams.get('domain');
+const initialDomain = urlParams.get('domain');
+if (initialDomain) {
+    document.getElementById('domain').value = initialDomain;
 }
 
 function checkEnter(event) {
@@ -316,11 +332,10 @@ function buildIndentView(logData, container) {
             itemBlock.className = 'server-item-block';
 
             const rowDiv = document.createElement('div');
-            // 第一階層（checkRoot が true）の場合はクラス名に「is-root」を付与します
             rowDiv.className = `server-row ${typeKey}-border ${checkRoot ? 'is-root' : ''}`;
             rowDiv.innerHTML = `
                 <span class="server-ip">${node.server}</span>
-                <span class="server-status ${typeKey}-bg">${node.status}</span>
+                <span class="server-status ${typeKey}-bg status-badge">${node.status}</span>
                 <span class="server-detail">${node.detail}</span>
             `;
 
