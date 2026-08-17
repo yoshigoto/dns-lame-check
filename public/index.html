@@ -85,17 +85,23 @@
             letter-spacing: 0.02em;
         }
         .summary-verdict {
-            font-size: 16px;
-            font-weight: bold;
+            font-size: 20px;
+            font-weight: 900;
             margin: 0 0 12px 0;
-            line-height: 1.5;
-            color: #1f2d3d;
+            line-height: 1.6;
+            padding: 12px 14px;
+            border-radius: 6px;
+            color: white;
+            text-align: center;
+            letter-spacing: 0.02em;
         }
         .summary-verdict.warning {
-            color: #b42318;
+            background: linear-gradient(135deg, #dc3545, #b42318);
+            box-shadow: 0 4px 8px rgba(220, 53, 69, 0.3);
         }
         .summary-verdict.success {
-            color: #1f7a1f;
+            background: linear-gradient(135deg, #28a745, #1f7a1f);
+            box-shadow: 0 4px 8px rgba(40, 167, 69, 0.3);
         }
         .summary-grid {
             display: grid;
@@ -387,10 +393,10 @@ function buildSummary(logData) {
 
     const verdict = document.createElement('div');
     const verdictText = failures.length > 0
-        ? '注意: 委任の不整合が確認されました。'
+        ? '⚠️  異常検出: 委任の不整合あり'
         : networkErrors.length > 0
-            ? '確認中: 通信エラーがあり、結果の信頼性が低下しています。'
-            : '正常: 委任状態は概ね整っています。';
+            ? '🔍  確認中: 通信エラーで信頼性低下'
+            : '✅  正常: 委任状態は整っています';
     verdict.className = `summary-verdict ${failures.length > 0 || networkErrors.length > 0 ? 'warning' : 'success'}`;
     verdict.textContent = verdictText;
 
