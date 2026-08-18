@@ -158,6 +158,37 @@
             border-radius: 4px;
         }
 
+        .dual-log-layout {
+            display: flex;
+            flex-direction: column;
+            gap: 16px;
+        }
+        .log-panel {
+            background: white;
+            border: 1px solid #dfeaf7;
+            border-radius: 8px;
+            overflow: hidden;
+            min-width: 0;
+        }
+        .log-panel-header {
+            background: #eef6ff;
+            color: #244e7b;
+            font-weight: bold;
+            padding: 10px 14px;
+            border-bottom: 1px solid #dfeaf7;
+        }
+        .log-panel-body {
+            padding: 12px;
+            min-height: 120px;
+            overflow-x: auto;
+            white-space: normal;
+        }
+        .empty-log {
+            color: #666;
+            text-align: center;
+            padding: 24px 12px;
+        }
+
         .indent-list {
             list-style: none;
             padding: 0;
@@ -339,12 +370,15 @@ async function startTrace() {
         clearTimeout(timeoutId);
 
         const data = await response.json();
-        if (!data.success || !data.log || data.log.length === 0) {
+        const zoneApexLog = Array.isArray(data.zoneApexLog) ? data.zoneApexLog : [];
+        const traceLog = Array.isArray(data.traceLog) ? data.traceLog : [];
+
+        if (!data.success || (zoneApexLog.length === 0 && traceLog.length === 0)) {
             container.innerHTML = '<div style="color:red; text-align:center; padding-top:40px;">データの取得に失敗しました。</div>';
             return;
         }
 
-        buildIndentView(data.log, container);
+        buildDualLogView(zoneApexLog, traceLog, container);
 
     } catch (e) {
         clearTimeout(timeoutId);
@@ -432,10 +466,7 @@ function buildSummary(logData) {
     summaryPanel.classList.add('visible');
 }
 
-function buildIndentView(logData, container) {
-    container.innerHTML = ''; 
-    buildSummary(logData);
-
+function renderLogTree(logData, target) {
     const nodesMap = {};
     const rootNodes = [];
 
@@ -465,16 +496,15 @@ function buildIndentView(logData, container) {
         }
     });
 
-    // 今が第一階層（ルート）かどうかを判定するために checkRoot 引数を追加しました
     function generateHtmlList(nodes, checkRoot = false) {
         const ul = document.createElement('ul');
-        
+
         nodes.forEach(node => {
             const li = document.createElement('li');
 
             let typeKey = 'DELEGATED';
             if (node.status === 'SUCCESS') typeKey = 'SUCCESS';
-            if (node.status.startsWith('LAME_DELEGATION')) typeKey = 'LAME';
+            if (node.status && node.status.startsWith('LAME_DELEGATION')) typeKey = 'LAME';
             if (node.status === 'ERROR' || node.status === 'NETWORK_ERROR') typeKey = 'ERROR';
 
             const itemBlock = document.createElement('div');
@@ -507,7 +537,6 @@ function buildIndentView(logData, container) {
             li.appendChild(itemBlock);
 
             if (node.children.length > 0) {
-                // 子階層を呼び出すときは checkRoot を false にして通常記号（└─ ）にします
                 li.appendChild(generateHtmlList(node.children, false));
             }
 
@@ -519,10 +548,54 @@ function buildIndentView(logData, container) {
 
     const mainListWrapper = document.createElement('div');
     mainListWrapper.className = 'indent-list';
-
-    // 一番最初の呼び出し時だけ、第2引数に「true」を渡して第一階層であることを明示します
     mainListWrapper.appendChild(generateHtmlList(rootNodes, true));
-    container.appendChild(mainListWrapper);
+    target.appendChild(mainListWrapper);
+}
+
+function buildDualLogView(zoneApexLog, traceLog, container) {
+    container.innerHTML = '';
+    buildSummary([...zoneApexLog, ...traceLog]);
+
+    const wrapper = document.createElement('div');
+    wrapper.className = 'dual-log-layout';
+
+    const zonePanel = document.createElement('div');
+    zonePanel.className = 'log-panel';
+
+    const zoneHeader = document.createElement('div');
+    zoneHeader.className = 'log-panel-header';
+    zoneHeader.textContent = 'ゾーン頂点探索ログ';
+    zonePanel.appendChild(zoneHeader);
+
+    const zoneBody = document.createElement('div');
+    zoneBody.className = 'log-panel-body';
+    if (zoneApexLog.length > 0) {
+        renderLogTree(zoneApexLog, zoneBody);
+    } else {
+        zoneBody.innerHTML = '<div class="empty-log">表示するログがありません</div>';
+    }
+    zonePanel.appendChild(zoneBody);
+
+    const tracePanel = document.createElement('div');
+    tracePanel.className = 'log-panel';
+
+    const traceHeader = document.createElement('div');
+    traceHeader.className = 'log-panel-header';
+    traceHeader.textContent = '委任追跡ログ';
+    tracePanel.appendChild(traceHeader);
+
+    const traceBody = document.createElement('div');
+    traceBody.className = 'log-panel-body';
+    if (traceLog.length > 0) {
+        renderLogTree(traceLog, traceBody);
+    } else {
+        traceBody.innerHTML = '<div class="empty-log">表示するログがありません</div>';
+    }
+    tracePanel.appendChild(traceBody);
+
+    wrapper.appendChild(zonePanel);
+    wrapper.appendChild(tracePanel);
+    container.appendChild(wrapper);
 }
 </script>
 </body>

@@ -526,17 +526,20 @@ app.post('/api/trace', async (req, res) => {
     try {
         const zoneApexInfo = await getZoneApex(domain, dnsResponseCache);
         const explorationLog = zoneApexInfo.explorationLogs || zoneApexInfo.errorLogs || [];
-        if (zoneApexInfo.zoneApex === '') {
-            res.json({ success: true, log: [...explorationLog] });
-        } else if (zoneApexInfo.parentNs !== '') {
-            const serverList = new Array(zoneApexInfo.parentNs);
-            const traceLog = await traceDomain(zoneApexInfo.zoneApex, serverList, dnsResponseCache, null, 1, [], {});
-            res.json({ success: true, log: [...explorationLog, ...traceLog] });
-        } else {
-            const serverList = new Array('a.root-servers.net');
-            const traceLog = await traceDomain(zoneApexInfo.zoneApex, serverList, dnsResponseCache, null, 1, [], {});
-            res.json({ success: true, log: [...explorationLog, ...traceLog] });
+
+        let traceLog = [];
+        if (zoneApexInfo.zoneApex !== '') {
+            const serverList = zoneApexInfo.parentNs !== ''
+                ? new Array(zoneApexInfo.parentNs)
+                : new Array('a.root-servers.net');
+            traceLog = await traceDomain(zoneApexInfo.zoneApex, serverList, dnsResponseCache, null, 1, [], {});
         }
+
+        res.json({
+            success: true,
+            zoneApexLog: [...explorationLog],
+            traceLog: [...traceLog]
+        });
     } catch (error) {
         res.status(500).json({ success: false, error: error.message });
     }
