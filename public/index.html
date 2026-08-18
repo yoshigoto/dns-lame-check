@@ -420,7 +420,7 @@ function buildSummary(logData) {
         },
         {
             label: '異常検出',
-            value: failureEntries.length > 0 || maxDepthCount > 0 || missingAuthorityNsCount > 0 ? `${failureEntries.length + maxDepthCount + missingAuthorityNsCount} 件の委任異常` : 'なし',
+            value: failureEntries.length > 0 ? `${failureEntries.length} 件の委任異常` : 'なし',
             tone: failureEntries.length > 0 || maxDepthCount > 0 || missingAuthorityNsCount > 0 ? 'warning' : 'success'
         },
         {
