@@ -1,6 +1,6 @@
 import express from 'express';
-import dgram from 'dgram';
 import net from 'net';
+import dgram from 'dgram';
 import dnsPacket from 'dns-packet';	// https://github.com/mafintosh/dns-packet
 import promisesDns from 'dns/promises';
 
