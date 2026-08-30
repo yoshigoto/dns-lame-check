@@ -333,6 +333,28 @@ if (initialDomain) {
     document.getElementById('domain').value = initialDomain;
 }
 
+function normalizeUserDomain(value) {
+    const raw = String(value || '').trim();
+    if (!raw) return '';
+
+    try {
+        const urlObj = new URL(raw.includes('://') ? raw : `https://${raw}`);
+        const hostname = urlObj.hostname.replace(/\.$/, '').toLowerCase();
+        if (!hostname || hostname.length > 253) return '';
+        if (!/^(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$/i.test(hostname)) {
+            return '';
+        }
+        return hostname;
+    } catch (e) {
+        const hostname = raw.replace(/^https?:\/\//i, '').replace(/\/$/, '').replace(/\.$/, '').toLowerCase();
+        if (!hostname || hostname.length > 253) return '';
+        if (!/^(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$/i.test(hostname)) {
+            return '';
+        }
+        return hostname;
+    }
+}
+
 function checkEnter(event) {
     if (event.key === 'Enter') {
         event.preventDefault();
@@ -341,16 +363,8 @@ function checkEnter(event) {
 }
 
 async function startTrace() {
-    let domain = document.getElementById('domain').value.trim();
+    let domain = normalizeUserDomain(document.getElementById('domain').value);
     const container = document.getElementById('result-container');
-
-    try {
-        const urlObj = new URL(domain);
-        if (urlObj && urlObj.hostname) {
-            domain = urlObj.hostname;
-        }
-    } catch (e) {
-    }
 
     if (!domain) return alert('ドメイン名を入力してください');
 
@@ -456,7 +470,15 @@ function buildSummary(logData) {
     summaryItems.forEach(item => {
         const node = document.createElement('div');
         node.className = `summary-item ${item.tone || 'info'}`;
-        node.innerHTML = `<strong>${item.label}</strong><span>${item.value}</span>`;
+
+        const label = document.createElement('strong');
+        label.textContent = item.label;
+
+        const value = document.createElement('span');
+        value.textContent = item.value;
+
+        node.appendChild(label);
+        node.appendChild(value);
         grid.appendChild(node);
     });
 
@@ -512,11 +534,22 @@ function renderLogTree(logData, target) {
 
             const rowDiv = document.createElement('div');
             rowDiv.className = `server-row ${typeKey}-border ${checkRoot ? 'is-root' : ''}`;
-            rowDiv.innerHTML = `
-                <span class="server-ip">${node.server}</span>
-                <span class="server-status ${typeKey}-bg status-badge">${node.status}</span>
-                <span class="server-detail">${node.detail}</span>
-            `;
+
+            const serverIp = document.createElement('span');
+            serverIp.className = 'server-ip';
+            serverIp.textContent = node.server;
+
+            const serverStatus = document.createElement('span');
+            serverStatus.className = `server-status ${typeKey}-bg status-badge`;
+            serverStatus.textContent = node.status;
+
+            const serverDetail = document.createElement('span');
+            serverDetail.className = 'server-detail';
+            serverDetail.textContent = node.detail;
+
+            rowDiv.appendChild(serverIp);
+            rowDiv.appendChild(serverStatus);
+            rowDiv.appendChild(serverDetail);
 
             itemBlock.appendChild(rowDiv);
 

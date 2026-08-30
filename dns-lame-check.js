@@ -16,6 +16,22 @@ function normalizeDnsName(name) {
     return String(name || '').trim().toLowerCase().replace(/\.$/, '');
 }
 
+function normalizeUserDomain(value) {
+    const raw = String(value || '').trim();
+    if (!raw) return '';
+
+    const candidate = raw.replace(/^https?:\/\//i, '').replace(/\/$/, '');
+    const normalized = normalizeDnsName(candidate);
+
+    if (!normalized) return '';
+    if (normalized.length > 253) return '';
+    if (!/^(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$/i.test(normalized)) {
+        return '';
+    }
+
+    return normalized;
+}
+
 const DNS_CACHE_TTL = {
     success: 30000,
     transient: 2000,
@@ -508,7 +524,7 @@ async function traceDomain(domain, servers, dnsResponseCache, parentIP = null, c
 }
 
 app.post('/api/trace', async (req, res) => {
-    const { domain } = req.body;
+    const domain = normalizeUserDomain(req.body?.domain);
     if (!domain) {
         return res.status(400).json({ error: 'ドメイン名を入力してください' });
     }
