@@ -435,19 +435,19 @@ async function traceDomain(domain, servers, dnsResponseCache, parentIP = null, c
                 if (isMatch) {
                     logEntry.nsMatch = {
                         success: true,
-                        msg: `✅ NS情報一致！${cacheNote}\r　委任情報: [${parentNSListNormalized.sort().join(', ')}]`
+                        msg: `✅ NS情報一致！${cacheNote}\r委任情報: [${parentNSListNormalized.sort().join(', ')}]`
                     };
                 } else {
                     logEntry.nsMatch = {
                         success: false, 
-                        msg: `⚠️ NS情報不一致！\r　親が保持する委任情報: [${parentNSListNormalized.sort().join(', ')}]\r　子が保持する NS情報: [${childNSList.sort().join(', ')}]${cacheNote}`
+                        msg: `⚠️ NS情報不一致！\r親が保持する委任情報: [${parentNSListNormalized.sort().join(', ')}]\r子が保持する NS情報: [${childNSList.sort().join(', ')}]${cacheNote}`
                     };
                     logEntry.status = 'LAME_DELEGATION_NOT_MATCH';
                 }
             } else if (childNSList.length === 0 && parentNSListNormalized.length > 0) {
                 logEntry.nsMatch = {
                     success: false,
-                    msg: `⚠️ NS情報不一致！\r　親が保持する委任情報: [${parentNSListNormalized.sort().join(', ')}]\r　子が保持する NS情報: (NSレコードが存在しません)${cacheNote}`
+                    msg: `⚠️ NS情報不一致！\r親が保持する委任情報: [${parentNSListNormalized.sort().join(', ')}]\r子が保持する NS情報: (NSレコードが存在しません)${cacheNote}`
                 };
                 logEntry.status = 'LAME_DELEGATION_NOT_MATCH';
             }
@@ -468,12 +468,12 @@ async function traceDomain(domain, servers, dnsResponseCache, parentIP = null, c
                         if (isGlueMatch) {
                             logEntry.glueMatch = {
                                 success: true,
-                                msg: `✅ IPアドレス一致！【${currentNSName}】\r　子の IPアドレス: [${sortedChild.sort().join(', ')}]`
+                                msg: `✅ IPアドレス一致！【${currentNSName}】\r子の IPアドレス: [${sortedChild.sort().join(', ')}]`
                             };
                         } else {
                             logEntry.glueMatch = {
                                 success: false,
-                                msg: `⚠️ IPアドレス不一致！【${currentNSName}】\r　親が保持する子情報: [${sortedParent.sort().join(', ')}]\r　子の IPアドレス: [${sortedChild.sort().join(', ')}]`
+                                msg: `⚠️ IPアドレス不一致！【${currentNSName}】\r親が保持する子情報: [${sortedParent.sort().join(', ')}]\r子の IPアドレス: [${sortedChild.sort().join(', ')}]`
                             };
                             logEntry.status = 'LAME_DELEGATION_NOT_MATCH';
                         }
