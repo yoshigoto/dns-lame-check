@@ -36,6 +36,18 @@ function normalizeUserDomain(value) {
     return normalized;
 }
 
+function isSubdomainOrEqual(childCandidate, parentCandidate) {
+    const c = normalizeDnsName(childCandidate);
+    const p = normalizeDnsName(parentCandidate);
+    if (!c || !p) return false;
+    if (c === p) return true;
+    return c.endsWith('.' + p);
+}
+
+function hasParentChildRelationship(domainA, domainB) {
+    return isSubdomainOrEqual(domainA, domainB) || isSubdomainOrEqual(domainB, domainA);
+}
+
 const DNS_CACHE_TTL = {
     success: 30000,
     transient: 2000,
@@ -229,7 +241,7 @@ function queryDirectly(domain, serverIp, dnsResponseCache, qType = 'NS', useEdns
                     return fallback();
                 }
 
-                const hasNsRecord = [...answers, ...authorities].some(r => r.type === 'NS');
+                const hasNsRecord = [...answers, ...authorities].some(r => r.type === 'NS' && hasParentChildRelationship(domain, r.name));
                 if (hasNsRecord) {
                     setCacheEntry(dnsResponseCache, cacheKey, decoded, DNS_CACHE_TTL.success);
                 }
@@ -259,6 +271,7 @@ async function getZoneApex(domain, dnsResponseCache) {
     let zoneApex = '';
     let cdName = false;
     let explorationLogs = [];
+    let lastDelegatedZone = '';
 
     const pushExplorationLog = (status, detail, server = currentNs, parent = parentNs || null, extra = {}) => {
         explorationLogs.push({
@@ -286,7 +299,21 @@ async function getZoneApex(domain, dnsResponseCache) {
             const isAuthoritative = (res.flags & (dnsPacket.AUTHORITATIVE_ANSWER || 1024)) !== 0;
             const answers = res.answers || [];
             const authorities = res.authorities || [];
-            const soaRecord = [...answers, ...authorities].find(r => r.type === 'SOA');
+
+            if (isAuthoritative) {
+                const cnameRecord = answers.find(r => r.type === 'CNAME');
+                const dnameRecord = answers.find(r => r.type === 'DNAME');
+                if (cnameRecord || dnameRecord) {
+                    const detail = cnameRecord
+                        ? `入力名は CNAME（${normalizeDnsName(cnameRecord.name)} -> ${normalizeDnsName(cnameRecord.data)}）です。CNAME の委任先は追跡せず、ゾーン頂点としての委任検査を終了します。 (${serverIp})`
+                        : `回答に DNAME が含まれており、ゾーン頂点を確定できませんでした。 (${serverIp})`;
+                    pushExplorationLog(cnameRecord ? 'CNAME_FOUND' : 'DNAME_FOUND', detail, currentNs, currentParent);
+                    cdName = true;
+                    break;
+                }
+            }
+
+            const soaRecord = [...answers, ...authorities].find(r => r.type === 'SOA' && isSubdomainOrEqual(domain, r.name));
 
             if (soaRecord) {
                 zoneApex = normalizeDnsName(soaRecord.name);
@@ -294,20 +321,13 @@ async function getZoneApex(domain, dnsResponseCache) {
                 break;
             }
 
-            if (isAuthoritative) {
-                const cnameRecord = answers.find(r => r.type === 'CNAME');
-                const dnameRecord = answers.find(r => r.type === 'DNAME');
-                if (cnameRecord || dnameRecord) {
-                    pushExplorationLog(cnameRecord ? 'CNAME_FOUND' : 'DNAME_FOUND', `回答に ${cnameRecord ? 'CNAME' : 'DNAME'} が含まれており、ゾーン頂点を確定できませんでした。 (${serverIp})`, currentNs, currentParent);
-                    cdName = true;
+            const validNsRecords = authorities.filter(r => r.type === 'NS' && isSubdomainOrEqual(domain, r.name));
+            if (validNsRecords.length > 0) {
+                const nextZone = normalizeDnsName(validNsRecords[0].name);
+                if (nextZone !== lastDelegatedZone) {
+                    delegation = { nsRecords: validNsRecords, additionals: res.additionals || [], serverIp, nextZone };
                     break;
                 }
-            }
-
-            const nsRecords = authorities.filter(r => r.type === 'NS');
-            if (nsRecords.length > 0) {
-                delegation = { nsRecords, additionals: res.additionals || [], serverIp };
-                break;
             }
 
             pushExplorationLog('UNEXPECTED_RESPONSE', `ゾーン頂点を特定できない応答です (${serverIp}, rcode: ${res.rcode}, AA: ${isAuthoritative})。`, currentNs, currentParent);
@@ -328,6 +348,7 @@ async function getZoneApex(domain, dnsResponseCache) {
         parentServerIPs = currentServerIPs;
         currentNs = nextNsNames.join(', ');
         currentServerIPs = nextServerIPs;
+        lastDelegatedZone = delegation.nextZone;
     }
     return {
         currentNs: currentNs,
@@ -402,7 +423,9 @@ async function traceDomain(domain, servers, dnsResponseCache, parentIP = null, c
         if (isAuthoritative && answers.length > 0) {
             logEntry.status = 'SUCCESS';
 
-            const childNSList = answers.filter(r => r.type === 'NS').map(r => normalizeDnsName(r.data));
+            const childNSList = answers
+                .filter(r => r.type === 'NS' && hasParentChildRelationship(domain, r.name))
+                .map(r => normalizeDnsName(r.data));
             const parentNSListNormalized = expectedNSList.map(ns => normalizeDnsName(ns));
 
             if (childNSList.length > 0 && parentNSListNormalized.length > 0) {
@@ -421,6 +444,12 @@ async function traceDomain(domain, servers, dnsResponseCache, parentIP = null, c
                     };
                     logEntry.status = 'LAME_DELEGATION_NOT_MATCH';
                 }
+            } else if (childNSList.length === 0 && parentNSListNormalized.length > 0) {
+                logEntry.nsMatch = {
+                    success: false,
+                    msg: `⚠️ NS情報不一致！\r　親が保持する委任情報: [${parentNSListNormalized.sort().join(', ')}]\r　子が保持する NS情報: (NSレコードが存在しません)${cacheNote}`
+                };
+                logEntry.status = 'LAME_DELEGATION_NOT_MATCH';
             }
 
             const currentNSName = Object.keys(parentGlueMap).find(name => parentGlueMap[name].includes(serverIp));
@@ -467,7 +496,7 @@ async function traceDomain(domain, servers, dnsResponseCache, parentIP = null, c
             continue;
         }
 
-        const nsRecords = authorities.filter(r => r.type === 'NS');
+        const nsRecords = authorities.filter(r => r.type === 'NS' && hasParentChildRelationship(domain, r.name));
         if (nsRecords.length > 0) {
             logEntry.status = 'DELEGATED';
             logEntry.detail = `AUTHORITY SECTION に ${nsRecords.length} 個の NSレコード。IPアドレスを以下に列挙。${cacheNote}`;

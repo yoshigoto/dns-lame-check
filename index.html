@@ -450,8 +450,10 @@ function buildSummary(logData) {
     ];
 
     const verdict = document.createElement('div');
-    const verdictText = aliasIssue
-        ? '⚠️  要確認: CNAME/DNAME によりゾーン頂点を確定できません'
+    const verdictText = cnameFound
+        ? '⚠️  検査対象外: 入力名は CNAME（別名）です。ゾーン名を指定してください'
+        : dnameFound
+            ? '⚠️  要確認: DNAME によりゾーン頂点を確定できません'
         : failureEntries.length > 0 || maxDepthCount > 0 || missingAuthorityNsCount > 0
             ? '⚠️  異常検出: 委任に不整合があります'
             : networkErrors.length > 0
