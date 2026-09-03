@@ -51,7 +51,7 @@ function hasParentChildRelationship(domainA, domainB) {
 const DNS_CACHE_TTL = {
     success: 30000,
     transient: 2000,
-    timeout: 3000
+    timeout: Infinity
 };
 
 function getCacheEntry(dnsResponseCache, cacheKey) {
@@ -78,6 +78,11 @@ function setCacheEntry(dnsResponseCache, cacheKey, value, ttlMs = DNS_CACHE_TTL.
 function queryDirectlyTCP(domain, serverIp, dnsResponseCache, qType = 'NS') {
     return new Promise((resolve) => {
         const cacheKey = `${serverIp}|${qType}|${domain}`;
+        const cachedResult = getCacheEntry(dnsResponseCache, cacheKey);
+        if (cachedResult) {
+            return resolve({ ...cachedResult, isCached: true });
+        }
+
         let settled = false;
         let socket = null;
         let timer = null;
@@ -102,7 +107,7 @@ function queryDirectlyTCP(domain, serverIp, dnsResponseCache, qType = 'NS') {
                 socket.write(tcpBuf);
             });
 
-            const timer = setTimeout(() => {
+            timer = setTimeout(() => {
                 const timeoutResult = { error: 'TIMEOUT', transport: 'tcp' };
                 setCacheEntry(dnsResponseCache, cacheKey, timeoutResult, DNS_CACHE_TTL.timeout);
                 finish(timeoutResult);
