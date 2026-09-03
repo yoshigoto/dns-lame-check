@@ -1,12 +1,16 @@
 import express from 'express';
 import net from 'net';
 import dgram from 'dgram';
+import path from 'path';
 import dnsPacket from 'dns-packet';	// https://github.com/mafintosh/dns-packet
 import promisesDns from 'dns/promises';
+import { fileURLToPath } from 'url';
 
+const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const app = express();
 app.use(express.json());
 app.use(express.static('public'));
+app.get('/', (req, res) => res.sendFile(path.join(__dirname, 'index.html')));
 
 function isIPv6(ip) {
     return ip.includes(':');
@@ -129,7 +133,7 @@ function queryDirectlyTCP(domain, serverIp, dnsResponseCache, qType = 'NS') {
     });
 }
 
-function queryDirectly(domain, serverIp, dnsResponseCache, qType = 'NS') {
+function queryDirectly(domain, serverIp, dnsResponseCache, qType = 'NS', useEdns = true) {
     return new Promise((resolve) => {
         const cacheKey = `${serverIp}|${qType}|${domain}`;
 
@@ -157,7 +161,7 @@ function queryDirectly(domain, serverIp, dnsResponseCache, qType = 'NS') {
                 type: 'query',
                 id: Math.floor(Math.random() * 65534),
                 questions: [{ type: qType, name: domain }],
-                additionals: [{ type: 'OPT', name: '.', udpPayloadSize: 1232 }]
+                additionals: useEdns ? [{ type: 'OPT', name: '.', udpPayloadSize: 1232 }] : []
             });
 
             client.send(buf, 0, buf.length, 53, serverIp, (err) => {
@@ -188,6 +192,12 @@ function queryDirectly(domain, serverIp, dnsResponseCache, qType = 'NS') {
         client.on('message', (msg) => {
             try {
                 const decoded = dnsPacket.decode(msg);
+                if (decoded.rcode === 'FORMERR' && useEdns) {
+                    if (timer) clearTimeout(timer);
+                    try { client.close(); } catch (e) {}
+                    return queryDirectly(domain, serverIp, dnsResponseCache, qType, false)
+                        .then(result => finish({ ...result, retryWithoutEdns: true }));
+                }
                 const answers = decoded.answers || [];
                 const authorities = decoded.authorities || [];
 
@@ -243,7 +253,9 @@ async function resolveServerIPs(nsName) {
 
 async function getZoneApex(domain, dnsResponseCache) {
     let currentNs = 'a.root-servers.net';
+    let currentServerIPs = await resolveServerIPs(currentNs);
     let parentNs = '';
+    let parentServerIPs = [];
     let zoneApex = '';
     let cdName = false;
     let explorationLogs = [];
@@ -260,81 +272,67 @@ async function getZoneApex(domain, dnsResponseCache) {
         });
     };
 
-    for (let i = 0; i < 10; i++) {
-        const currentServer = currentNs;
+    for (let i = 0; i < 10 && currentServerIPs?.length; i++) {
         const currentParent = parentNs || null;
+        let delegation = null;
 
-        const res = await queryDirectly(domain, currentNs, dnsResponseCache, 'SOA');
+        for (const serverIp of currentServerIPs) {
+            const res = await queryDirectly(domain, serverIp, dnsResponseCache, 'SOA');
+            if (res.error) {
+                pushExplorationLog('NETWORK_ERROR', `ゾーン頂点探索中のエラー (${serverIp}): ${res.error}${res.detail ? ' - ' + res.detail : ''}`, currentNs, currentParent);
+                continue;
+            }
 
-        if (res.error === 'TIMEOUT' || res.error === 'SEND_ERROR' || res.error === 'SOCKET_ERROR' || res.error === 'DECODE_ERROR') {
-            pushExplorationLog(
-                'NETWORK_ERROR',
-                `ゾーン頂点探索中のエラー: ${res.error}${res.detail ? ' - ' + res.detail : ''}`,
-                currentNs,
-                currentParent
-            );
-            break;
-        }
+            const isAuthoritative = (res.flags & (dnsPacket.AUTHORITATIVE_ANSWER || 1024)) !== 0;
+            const answers = res.answers || [];
+            const authorities = res.authorities || [];
+            const soaRecord = [...answers, ...authorities].find(r => r.type === 'SOA');
 
-        const AUTHORITATIVE_ANSWER = dnsPacket.AUTHORITATIVE_ANSWER || 1024;
-        const isAuthoritative = (res.flags & AUTHORITATIVE_ANSWER) !== 0;
-        const answers = res.answers || [];
-        const authorities = res.authorities || [];
-        const additionals = res.additionals || [];
-        if (isAuthoritative) {
-            if (res.rcode === 'NOERROR') {
-                if (answers.length > 0) {
-                    const cnameRecord = answers.find(r => r.type === 'CNAME');
-                    if (cnameRecord) {
-                        pushExplorationLog('CNAME_FOUND', `回答に CNAME が含まれており、ゾーン頂点を確定できませんでした。`, currentNs, currentParent);
-                        cdName = true;
-                        break;
-                    }
-                    const dnameRecord = answers.find(r => r.type === 'DNAME');
-                    if (dnameRecord) {
-                        pushExplorationLog('DNAME_FOUND', `回答に DNAME が含まれており、ゾーン頂点を確定できませんでした。`, currentNs, currentParent);
-                        cdName = true;
-                        break;
-                    }
-                    const soaRecord = answers.find(r => r.type === 'SOA');
-                    if (soaRecord) {
-                        zoneApex = normalizeDnsName(soaRecord.name);
-                        pushExplorationLog('SOA_FOUND', `ゾーン頂点を確定: ${zoneApex}`, currentNs, currentParent);
-                        break;
-                    }
-                } else if (authorities.length > 0) {
-                    const soaRecord = authorities.find(r => r.type === 'SOA');
-                    if (soaRecord) {
-                        zoneApex = normalizeDnsName(soaRecord.name);
-                        pushExplorationLog('SOA_FOUND', `ゾーン頂点を確定: ${zoneApex}`, currentNs, currentParent);
-                        break;
-                    }
+            if (soaRecord) {
+                zoneApex = normalizeDnsName(soaRecord.name);
+                pushExplorationLog(res.rcode === 'NXDOMAIN' ? 'NXDOMAIN_SOA_FOUND' : 'SOA_FOUND', `ゾーン頂点を確定: ${zoneApex} (${serverIp})`, currentNs, currentParent);
+                break;
+            }
+
+            if (isAuthoritative) {
+                const cnameRecord = answers.find(r => r.type === 'CNAME');
+                const dnameRecord = answers.find(r => r.type === 'DNAME');
+                if (cnameRecord || dnameRecord) {
+                    pushExplorationLog(cnameRecord ? 'CNAME_FOUND' : 'DNAME_FOUND', `回答に ${cnameRecord ? 'CNAME' : 'DNAME'} が含まれており、ゾーン頂点を確定できませんでした。 (${serverIp})`, currentNs, currentParent);
+                    cdName = true;
+                    break;
                 }
             }
-            if (res.rcode === 'NXDOMAIN') {
-                if (authorities.length > 0) {
-                    const soaRecord = authorities.find(r => r.type === 'SOA');
-                    if (soaRecord) {
-                        zoneApex = normalizeDnsName(soaRecord.name);
-                        pushExplorationLog('NXDOMAIN_SOA_FOUND', `NXDOMAIN に対する SOA からゾーン頂点を確定: ${zoneApex}`, currentNs, currentParent);
-                        break;
-                    }
-                }
+
+            const nsRecords = authorities.filter(r => r.type === 'NS');
+            if (nsRecords.length > 0) {
+                delegation = { nsRecords, additionals: res.additionals || [], serverIp };
+                break;
             }
+
+            pushExplorationLog('UNEXPECTED_RESPONSE', `ゾーン頂点を特定できない応答です (${serverIp}, rcode: ${res.rcode}, AA: ${isAuthoritative})。`, currentNs, currentParent);
         }
-        if (!isAuthoritative && authorities.length > 0) {
-            const nsRecord = authorities.find(r => r.type === 'NS');
-            if (nsRecord) {
-                const nextNs = normalizeDnsName(nsRecord.data);
-                pushExplorationLog('FOLLOW_DELEGATION', `${currentNs} が ${nextNs} を示しました。`, currentNs, currentParent, { nextServer: nextNs });
-                parentNs = currentNs;
-                currentNs = nextNs;
-            }
-        }
+
+        if (zoneApex || cdName) break;
+        if (!delegation) break;
+
+        const nextNsNames = delegation.nsRecords.map(record => normalizeDnsName(record.data));
+        const glueIPs = delegation.additionals
+            .filter(record => (record.type === 'A' || record.type === 'AAAA') && nextNsNames.includes(normalizeDnsName(record.name)))
+            .map(record => record.data);
+        const resolvedIPs = await Promise.all(nextNsNames.map(resolveServerIPs));
+        const nextServerIPs = [...new Set([...glueIPs, ...resolvedIPs.flat().filter(Boolean)])];
+
+        pushExplorationLog('FOLLOW_DELEGATION', `${currentNs} が ${nextNsNames.join(', ')} を示しました。 (${delegation.serverIp})`, currentNs, currentParent, { nextServer: nextNsNames, glueIPs });
+        parentNs = currentNs;
+        parentServerIPs = currentServerIPs;
+        currentNs = nextNsNames.join(', ');
+        currentServerIPs = nextServerIPs;
     }
     return {
         currentNs: currentNs,
         parentNs: parentNs,
+        parentServerIPs: parentServerIPs,
         zoneApex: zoneApex,
         cdName: cdName,
         explorationLogs: explorationLogs,
@@ -545,9 +543,9 @@ app.post('/api/trace', async (req, res) => {
 
         let traceLog = [];
         if (zoneApexInfo.zoneApex !== '') {
-            const serverList = zoneApexInfo.parentNs !== ''
-                ? new Array(zoneApexInfo.parentNs)
-                : new Array('a.root-servers.net');
+            const serverList = zoneApexInfo.parentServerIPs.length > 0
+                ? zoneApexInfo.parentServerIPs
+                : await resolveServerIPs('a.root-servers.net');
             traceLog = await traceDomain(zoneApexInfo.zoneApex, serverList, dnsResponseCache, null, 1, [], {});
         }
 
