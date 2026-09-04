@@ -54,6 +54,32 @@ function isInBailiwickGlue(record, nsNames, delegatedZone) {
         isSubdomainOrEqual(record.name, delegatedZone);
 }
 
+function summarizeRfc9471Referral(nsRecords, additionals, retryFrom = '') {
+    const delegatedZone = normalizeDnsName(nsRecords[0]?.name);
+    const nsNames = nsRecords.map(record => normalizeDnsName(record.data));
+    const inDomainNs = nsNames.filter(nsName => isSubdomainOrEqual(nsName, delegatedZone));
+    const inDomainGlueNames = [...new Set(additionals
+        .filter(record => isInBailiwickGlue(record, nsNames, delegatedZone))
+        .map(record => normalizeDnsName(record.name)))];
+    const missingInDomainGlueNames = inDomainNs.filter(nsName => !inDomainGlueNames.includes(nsName));
+    const nonInDomainAddressNames = [...new Set(additionals
+        .filter(record => (record.type === 'A' || record.type === 'AAAA') && nsNames.includes(normalizeDnsName(record.name)) && !isSubdomainOrEqual(record.name, delegatedZone))
+        .map(record => normalizeDnsName(record.name)))];
+    const transportNote = retryFrom === 'udp-truncated'
+        ? 'UDP 応答は TC=1 のため TCP で再取得しました。'
+        : 'UDP 応答は TC=0 でした。';
+    const inDomainNote = inDomainNs.length === 0
+        ? 'in-domain NS はありません。'
+        : missingInDomainGlueNames.length === 0
+            ? `in-domain glue: [${inDomainGlueNames.join(', ')}]`
+            : `ADDITIONAL SECTION に存在しない in-domain NS: [${missingInDomainGlueNames.join(', ')}] → 親ゾーンで利用可能な glue が存在するかは応答だけでは判定できません。`;
+    const nonInDomainNote = nonInDomainAddressNames.length > 0
+        ? `ゾーン外 NS の追加アドレス: ${nonInDomainAddressNames.join(', ')} → sibling glue を含む可能性がありますが、このツールでは glue として採用しません`
+        : '';
+
+    return [transportNote, inDomainNote, nonInDomainNote].filter(Boolean).join('\r');
+}
+
 const DNS_CACHE_TTL = {
     success: 30000,
     transient: 2000,
@@ -317,7 +343,7 @@ async function getZoneApex(domain, dnsResponseCache) {
                 const dnameRecord = answers.find(r => r.type === 'DNAME');
                 if (cnameRecord || dnameRecord) {
                     const detail = cnameRecord
-                        ? `入力名は CNAME（${normalizeDnsName(cnameRecord.name)} -> ${normalizeDnsName(cnameRecord.data)}）です。CNAME の委任先は追跡せず、ゾーン頂点としての委任検査を終了します。 (${serverIp})`
+                        ? `入力名は CNAME (${normalizeDnsName(cnameRecord.name)} -> ${normalizeDnsName(cnameRecord.data)}) です。CNAME の委任先は追跡せず、ゾーン頂点としての委任検査を終了します。 (${serverIp})`
                         : `回答に DNAME が含まれており、ゾーン頂点を確定できませんでした。 (${serverIp})`;
                     pushExplorationLog(cnameRecord ? 'CNAME_FOUND' : 'DNAME_FOUND', detail, currentNs, currentParent);
                     cdName = true;
@@ -367,7 +393,11 @@ async function getZoneApex(domain, dnsResponseCache) {
         const resolvedIPs = await Promise.all(nextNsNames.map(resolveServerIPs));
         const nextServerIPs = [...new Set([...glueIPs, ...resolvedIPs.flat().filter(Boolean)])];
 
-        pushExplorationLog('FOLLOW_DELEGATION', `${currentNs} が ${nextNsNames.join(', ')} を示しました。 (${delegation.serverIp})`, currentNs, currentParent, { nextServer: nextNsNames, glueIPs });
+        pushExplorationLog('FOLLOW_DELEGATION', `${currentNs} が ${nextNsNames.join(', ')} を示しました。 (${delegation.serverIp})`, currentNs, currentParent, {
+            nextServer: nextNsNames,
+            glueIPs,
+            rfc9471: summarizeRfc9471Referral(delegation.nsRecords, delegation.additionals)
+        });
         parentNs = currentNs;
         parentServerIPs = currentServerIPs;
         currentNs = nextNsNames.join(', ');
@@ -528,6 +558,7 @@ async function traceDomain(domain, servers, dnsResponseCache, parentIP = null, c
 
             const currentNSNames = nsRecords.map(r => normalizeDnsName(r.data));
             const delegatedZone = normalizeDnsName(nsRecords[0].name);
+            logEntry.rfc9471 = summarizeRfc9471Referral(nsRecords, additionals, res.retryFrom);
 
             let nextGlueMap = {};
             let nextServerIPs = [];

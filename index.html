@@ -263,7 +263,7 @@
             text-overflow: clip;
         }
 
-        .ns-match-box, .glue-match-box {
+        .ns-match-box, .glue-match-box, .rfc9471-box {
             font-size: 12px;
             margin-top: 4px;
             margin-left: 35px; 
@@ -560,6 +560,13 @@ function renderLogTree(logData, target) {
                 glueMatchDiv.className = `glue-match-box ${node.glueMatch.success ? 'match-success' : 'match-fail'}`;
                 glueMatchDiv.innerText = node.glueMatch.msg;
                 itemBlock.appendChild(glueMatchDiv);
+            }
+
+            if (node.rfc9471) {
+                const rfc9471Div = document.createElement('div');
+                rfc9471Div.className = 'rfc9471-box match-success';
+                rfc9471Div.innerText = `RFC 9471 確認結果:\r${node.rfc9471}`;
+                itemBlock.appendChild(rfc9471Div);
             }
 
             if (node.nsMatch) {
