@@ -321,7 +321,19 @@ async function getZoneApex(domain, dnsResponseCache) {
             const soaRecord = [...answers, ...authorities].find(r => r.type === 'SOA' && isSubdomainOrEqual(domain, r.name));
 
             if (soaRecord) {
-                zoneApex = normalizeDnsName(soaRecord.name);
+                const soaName = normalizeDnsName(soaRecord.name);
+                if (lastDelegatedZone && !isSubdomainOrEqual(soaName, lastDelegatedZone)) {
+                    zoneApex = lastDelegatedZone;
+                    pushExplorationLog(
+                        'LAME_DELEGATION_SOA_MISMATCH',
+                        `親サーバー (${currentParent || currentNs}) は ${lastDelegatedZone} ゾーンの権威サーバーとして ${currentNs} を示しましたが、${currentNs} は ${soaName} ゾーンの SOA レコードを返しました。親子で情報が一致していません。 (${serverIp})`,
+                        currentNs,
+                        currentParent
+                    );
+                    break;
+                }
+
+                zoneApex = soaName;
                 pushExplorationLog(res.rcode === 'NXDOMAIN' ? 'NXDOMAIN_SOA_FOUND' : 'SOA_FOUND', `ゾーン頂点を確定: ${zoneApex} (${serverIp})`, currentNs, currentParent);
                 break;
             }
