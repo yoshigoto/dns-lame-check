@@ -79,6 +79,7 @@ function queryDirectlyTCP(domain, serverIp, dnsResponseCache, qType = 'NS') {
     return new Promise((resolve) => {
         const cacheKey = `${serverIp}|${qType}|${domain}`;
         const cachedResult = getCacheEntry(dnsResponseCache, cacheKey);
+        // 以前に同じサーバー・タイプ・ドメインに対して問い合わせ済みなら、即時復元
         if (cachedResult) {
             return resolve({ ...cachedResult, isCached: true });
         }
@@ -124,6 +125,7 @@ function queryDirectlyTCP(domain, serverIp, dnsResponseCache, qType = 'NS') {
                 receivedData = Buffer.concat([receivedData, chunk]);
 
                 while (receivedData.length >= 2) {
+                    // 先頭 2バイトから DNSメッセージの長さを取得
                     const msgLength = receivedData.readUInt16BE(0);
                     if (receivedData.length < msgLength + 2) break;
 
@@ -131,7 +133,7 @@ function queryDirectlyTCP(domain, serverIp, dnsResponseCache, qType = 'NS') {
                         const decoded = dnsPacket.streamDecode(receivedData);
                         if (!decoded) break;
 
-                        receivedData = receivedData.slice(2 + msgLength);
+                        receivedData = receivedData.subarray(2 + msgLength);
                         const tcpSuccess = { ...decoded, transport: 'tcp' };
                         setCacheEntry(dnsResponseCache, cacheKey, tcpSuccess, DNS_CACHE_TTL.success);
                         return finish(tcpSuccess);
@@ -150,12 +152,11 @@ function queryDirectlyTCP(domain, serverIp, dnsResponseCache, qType = 'NS') {
     });
 }
 
-function queryDirectly(domain, serverIp, dnsResponseCache, qType = 'NS', useEdns = true) {
+function queryDirectlyUDP(domain, serverIp, dnsResponseCache, qType = 'NS', useEdns = true) {
     return new Promise((resolve) => {
         const cacheKey = `${serverIp}|${qType}|${domain}`;
-
-        // 以前に同じサーバー・タイプ・ドメインに対して問い合わせ済みなら、即時復元
         const cachedResult = getCacheEntry(dnsResponseCache, cacheKey);
+        // 以前に同じサーバー・タイプ・ドメインに対して問い合わせ済みなら、即時復元
         if (cachedResult) {
             return resolve({ ...cachedResult, isCached: true });
         }
@@ -212,7 +213,7 @@ function queryDirectly(domain, serverIp, dnsResponseCache, qType = 'NS', useEdns
                 if (decoded.rcode === 'FORMERR' && useEdns) {
                     if (timer) clearTimeout(timer);
                     try { client.close(); } catch (e) {}
-                    return queryDirectly(domain, serverIp, dnsResponseCache, qType, false)
+                    return queryDirectlyUDP(domain, serverIp, dnsResponseCache, qType, false)
                         .then(result => finish({ ...result, retryWithoutEdns: true }));
                 }
                 const answers = decoded.answers || [];
@@ -295,7 +296,7 @@ async function getZoneApex(domain, dnsResponseCache) {
         let delegation = null;
 
         for (const serverIp of currentServerIPs) {
-            const res = await queryDirectly(domain, serverIp, dnsResponseCache, 'SOA');
+            const res = await queryDirectlyUDP(domain, serverIp, dnsResponseCache, 'SOA');
             if (res.error) {
                 pushExplorationLog('NETWORK_ERROR', `ゾーン頂点探索中のエラー (${serverIp}): ${res.error}${res.detail ? ' - ' + res.detail : ''}`, currentNs, currentParent);
                 continue;
@@ -402,7 +403,7 @@ async function traceDomain(domain, servers, dnsResponseCache, parentIP = null, c
             glueMatch: null
         };
 
-        const res = await queryDirectly(domain, serverIp, dnsResponseCache, 'NS');
+        const res = await queryDirectlyUDP(domain, serverIp, dnsResponseCache, 'NS');
 
         if (res.error === 'TIMEOUT') {
             logEntry.status = 'LAME_DELEGATION_TIMEOUT';
@@ -574,14 +575,6 @@ app.post('/api/trace', async (req, res) => {
     }
 
     const dnsResponseCache = new Map();
-    let logEntry = {
-        server: '',
-        parent: '',
-        status: '',
-        detail: '',
-        nsMatch: null,
-        glueMatch: null
-    };
 
     try {
         const zoneApexInfo = await getZoneApex(domain, dnsResponseCache);
