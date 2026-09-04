@@ -74,7 +74,7 @@ function summarizeRfc9471Referral(nsRecords, additionals, retryFrom = '') {
             ? `in-domain glue: [${inDomainGlueNames.join(', ')}]`
             : `ADDITIONAL SECTION に存在しない in-domain NS: [${missingInDomainGlueNames.join(', ')}] → 親ゾーンで利用可能な glue が存在するかは応答だけでは判定できません。`;
     const nonInDomainNote = nonInDomainAddressNames.length > 0
-        ? `ゾーン外 NS の追加アドレス: ${nonInDomainAddressNames.join(', ')} → sibling glue を含む可能性がありますが、このツールでは glue として採用しません`
+        ? `ゾーン外 NS の追加アドレス: ${nonInDomainAddressNames.join(', ')} → sibling glue を含む可能性がありますが、このツールでは glue として採用しません。`
         : '';
 
     return [transportNote, inDomainNote, nonInDomainNote].filter(Boolean).join('\r');
