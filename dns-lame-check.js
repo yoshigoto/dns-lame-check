@@ -48,6 +48,12 @@ function hasParentChildRelationship(domainA, domainB) {
     return isSubdomainOrEqual(domainA, domainB) || isSubdomainOrEqual(domainB, domainA);
 }
 
+function isInBailiwickGlue(record, nsNames, delegatedZone) {
+    return (record.type === 'A' || record.type === 'AAAA') &&
+        nsNames.includes(normalizeDnsName(record.name)) &&
+        isSubdomainOrEqual(record.name, delegatedZone);
+}
+
 const DNS_CACHE_TTL = {
     success: 30000,
     transient: 2000,
@@ -356,7 +362,7 @@ async function getZoneApex(domain, dnsResponseCache) {
 
         const nextNsNames = delegation.nsRecords.map(record => normalizeDnsName(record.data));
         const glueIPs = delegation.additionals
-            .filter(record => (record.type === 'A' || record.type === 'AAAA') && nextNsNames.includes(normalizeDnsName(record.name)))
+            .filter(record => isInBailiwickGlue(record, nextNsNames, delegation.nextZone))
             .map(record => record.data);
         const resolvedIPs = await Promise.all(nextNsNames.map(resolveServerIPs));
         const nextServerIPs = [...new Set([...glueIPs, ...resolvedIPs.flat().filter(Boolean)])];
@@ -521,15 +527,16 @@ async function traceDomain(domain, servers, dnsResponseCache, parentIP = null, c
             results.push(logEntry);
 
             const currentNSNames = nsRecords.map(r => normalizeDnsName(r.data));
+            const delegatedZone = normalizeDnsName(nsRecords[0].name);
 
             let nextGlueMap = {};
             let nextServerIPs = [];
 
             for (const ns of nsRecords) {
-                const nsKey = ns.data.toLowerCase().replace(/\.$/, '');
+                const nsKey = normalizeDnsName(ns.data);
                 nextGlueMap[nsKey] = [];
 
-                const matchedGlues = additionals.filter(r => r.name === ns.data && (r.type === 'A' || r.type === 'AAAA'));
+                const matchedGlues = additionals.filter(record => isInBailiwickGlue(record, [nsKey], delegatedZone));
                 if (matchedGlues.length > 0) {
                     // 本来の意味での Glueをリストに登録
                     matchedGlues.forEach(g => {
@@ -542,7 +549,6 @@ async function traceDomain(domain, servers, dnsResponseCache, parentIP = null, c
                     if (resolvedIPs) {
                         resolvedIPs.forEach(ip => {
                             nextServerIPs.push(ip);
-                            nextGlueMap[nsKey].push(ip);
                         });
                     }
                 }
