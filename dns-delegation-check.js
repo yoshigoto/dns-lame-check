@@ -301,6 +301,11 @@ async function resolveServerIPs(nsName) {
     return ips.length > 0 ? ips : null;
 }
 
+function getMinimizedQnames(domain) {
+    const labels = normalizeDnsName(domain).split('.');
+    return labels.map((_, index) => labels.slice(index).join('.')).reverse();
+}
+
 async function getZoneApex(domain, dnsResponseCache) {
     let currentNs = 'a.root-servers.net';
     let currentServerIPs = await resolveServerIPs(currentNs);
@@ -323,12 +328,19 @@ async function getZoneApex(domain, dnsResponseCache) {
         });
     };
 
-    for (let i = 0; i < 10 && currentServerIPs?.length; i++) {
+    const minimizedQnames = getMinimizedQnames(domain);
+    let qnameIndex = 0;
+    let parentDelegationUnavailable = false;
+
+    // ラベルを右から一つずつ増やし、親ゾーンから各ゾーンカットを取得する。
+    while (qnameIndex < minimizedQnames.length && currentServerIPs?.length) {
+        const qname = minimizedQnames[qnameIndex];
         const currentParent = parentNs || null;
         let delegation = null;
+        const authoritativeResponses = [];
 
         for (const serverIp of currentServerIPs) {
-            const res = await queryDirectlyUDP(domain, serverIp, dnsResponseCache, 'SOA');
+            const res = await queryDirectlyUDP(qname, serverIp, dnsResponseCache, 'NS');
             if (res.error) {
                 pushExplorationLog('NETWORK_ERROR', `ゾーン頂点探索中のエラー (${serverIp}): ${res.error}${res.detail ? ' - ' + res.detail : ''}`, currentNs, currentParent);
                 continue;
@@ -351,40 +363,56 @@ async function getZoneApex(domain, dnsResponseCache) {
                 }
             }
 
-            const soaRecord = [...answers, ...authorities].find(r => r.type === 'SOA' && isSubdomainOrEqual(domain, r.name));
-
-            if (soaRecord) {
-                const soaName = normalizeDnsName(soaRecord.name);
-                if (lastDelegatedZone && !isSubdomainOrEqual(soaName, lastDelegatedZone)) {
-                    zoneApex = lastDelegatedZone;
-                    pushExplorationLog(
-                        'LAME_DELEGATION_SOA_MISMATCH',
-                        `親サーバー (${currentParent || currentNs}) は ${lastDelegatedZone} ゾーンの権威サーバーとして ${currentNs} を示しましたが、${currentNs} は ${soaName} ゾーンの SOA レコードを返しました。親子で情報が一致していません。 (${serverIp})`,
-                        currentNs,
-                        currentParent
-                    );
-                    break;
-                }
-
-                zoneApex = soaName;
-                pushExplorationLog(res.rcode === 'NXDOMAIN' ? 'NXDOMAIN_SOA_FOUND' : 'SOA_FOUND', `ゾーン頂点を確定: ${zoneApex} (${serverIp})`, currentNs, currentParent);
+            const validNsRecords = authorities.filter(r => r.type === 'NS' && normalizeDnsName(r.name) === qname);
+            if (validNsRecords.length > 0) {
+                delegation = { nsRecords: validNsRecords, additionals: res.additionals || [], serverIp, nextZone: qname };
                 break;
             }
 
-            const validNsRecords = authorities.filter(r => r.type === 'NS' && isSubdomainOrEqual(domain, r.name));
-            if (validNsRecords.length > 0) {
-                const nextZone = normalizeDnsName(validNsRecords[0].name);
-                if (nextZone !== lastDelegatedZone) {
-                    delegation = { nsRecords: validNsRecords, additionals: res.additionals || [], serverIp, nextZone };
+            if (isAuthoritative) {
+                authoritativeResponses.push({ serverIp, answers, authorities });
+                pushExplorationLog('AUTHORITATIVE_NO_DELEGATION', `${qname} に対して ${currentNs} は権威応答を返し、下位ゾーンへの委任はありません。 (${serverIp})`, currentNs, currentParent);
+                continue;
+            }
+
+            pushExplorationLog('UNEXPECTED_RESPONSE', `委任情報を特定できない応答です (${serverIp}, qname: ${qname}, rcode: ${res.rcode}, AA: ${isAuthoritative})。`, currentNs, currentParent);
+        }
+
+        if (zoneApex || cdName) break;
+        if (!delegation) {
+            const childNsResponse = authoritativeResponses.find(({ answers }) =>
+                answers.some(record => record.type === 'NS' && normalizeDnsName(record.name) === qname)
+            );
+            let dsConfirmsDelegation = false;
+
+            for (const { serverIp } of authoritativeResponses) {
+                const dsResponse = await queryDirectlyUDP(qname, serverIp, dnsResponseCache, 'DS');
+                if (dsResponse.error) continue;
+
+                const dsAnswers = dsResponse.answers || [];
+                if (dsAnswers.some(record => record.type === 'DS' && normalizeDnsName(record.name) === qname)) {
+                    dsConfirmsDelegation = true;
                     break;
                 }
             }
 
-            pushExplorationLog('UNEXPECTED_RESPONSE', `ゾーン頂点を特定できない応答です (${serverIp}, rcode: ${res.rcode}, AA: ${isAuthoritative})。`, currentNs, currentParent);
-        }
+            if (childNsResponse || dsConfirmsDelegation) {
+                zoneApex = qname;
+                parentNs = currentNs;
+                parentServerIPs = currentServerIPs;
+                parentDelegationUnavailable = true;
+                pushExplorationLog(
+                    'COLOCATED_DELEGATION',
+                    `${qname} は親ゾーンと同じ権威サーバーに存在する子ゾーンです。親側の referral は取得できず、親が保持する委任 NS との比較は DNS 問い合わせだけでは実施できません。${dsConfirmsDelegation ? ' DS レコードでゾーンカットを確認しました。' : ' 子ゾーンの apex NS 応答を確認しました。'}`,
+                    currentNs,
+                    currentParent
+                );
+                break;
+            }
 
-        if (zoneApex || cdName) break;
-        if (!delegation) break;
+            qnameIndex++;
+            continue;
+        }
 
         const nextNsNames = delegation.nsRecords.map(record => normalizeDnsName(record.data));
         const glueIPs = delegation.additionals
@@ -410,17 +438,25 @@ async function getZoneApex(domain, dnsResponseCache) {
         }
 
         parentNs = currentNs;
-        parentServerIPs = currentServerIPs;
+        parentServerIPs = [delegation.serverIp];
         currentNs = nextNsNames.join(', ');
         currentServerIPs = nextServerIPs;
         lastDelegatedZone = delegation.nextZone;
+        qnameIndex++;
     }
+
+    if (!cdName && lastDelegatedZone) {
+        zoneApex = lastDelegatedZone;
+        pushExplorationLog('ZONE_APEX_FOUND', `ゾーン頂点を確定: ${zoneApex}。親ゾーンの委任情報を使用して検査します。`, currentNs, parentNs || null);
+    }
+
     return {
         currentNs: currentNs,
         parentNs: parentNs,
         parentServerIPs: parentServerIPs,
         zoneApex: zoneApex,
         cdName: cdName,
+        parentDelegationUnavailable: parentDelegationUnavailable,
         explorationLogs: explorationLogs,
         errorLogs: explorationLogs
     };
@@ -629,7 +665,7 @@ app.post('/api/trace', async (req, res) => {
         const explorationLog = zoneApexInfo.explorationLogs || zoneApexInfo.errorLogs || [];
 
         let traceLog = [];
-        if (zoneApexInfo.zoneApex !== '') {
+        if (zoneApexInfo.zoneApex !== '' && !zoneApexInfo.parentDelegationUnavailable) {
             const serverList = zoneApexInfo.parentServerIPs.length > 0
                 ? zoneApexInfo.parentServerIPs
                 : await resolveServerIPs('a.root-servers.net');
