@@ -473,7 +473,7 @@ function buildSummary(logData) {
         : dnameFound
             ? '⚠️  要確認: DNAME によりゾーン頂点を確定できません'
         : nameServerAddressFailures.length > 0
-            ? '⚠️  要確認: 権威サーバーの IP アドレスを取得できないため、委任状態を確認できません'
+            ? '⚠️  要確認: 権威サーバーについて名前解決できないため、委任状態を確認できません'
         : failureEntries.length > 0 || maxDepthCount > 0 || missingAuthorityNsCount > 0
             ? '⚠️  異常検出: 委任に不整合があります'
         : networkErrors.length > 0
