@@ -404,6 +404,18 @@ async function startTrace() {
     }
 }
 
+function isNameServerAddressResolutionFailure(item) {
+    const status = String(item.status || '').toUpperCase();
+    const detail = String(item.detail || '').toUpperCase();
+
+    return (
+        status === 'LAME_DELEGATION_NO_NS_IP_ADDRESS' ||
+        /(?:NS_)?(?:IP|ADDRESS)_(?:RESOLUTION_)?(?:FAILED|ERROR|NOT_FOUND|MISSING|UNAVAILABLE)/.test(status) ||
+        /(?:ネームサーバー|NS|名前サーバー).{0,30}(?:IPアドレス).{0,30}(?:取得できません|取得不可|解決できません|見つかりません|存在しません)/.test(detail) ||
+        /(?:IPアドレス).{0,30}(?:取得できません|取得不可|解決できません|見つかりません|存在しません)/.test(detail)
+    );
+}
+
 function buildSummary(logData) {
     const summaryPanel = document.getElementById('summary-panel');
     summaryPanel.innerHTML = '';
@@ -419,6 +431,7 @@ function buildSummary(logData) {
             : '未判定';
     const failureEntries = logData.filter(item => item.status && item.status.startsWith('LAME_DELEGATION'));
     const networkErrors = logData.filter(item => item.status === 'NETWORK_ERROR');
+    const nameServerAddressFailures = logData.filter(isNameServerAddressResolutionFailure);
     const successCount = logData.filter(item => item.status === 'SUCCESS').length;
     const missingAuthorityNsCount = logData.filter(item => item.status === 'LAME_DELEGATION_NO_AUTHORITY_NS').length;
     const maxDepthCount = logData.filter(item => item.status === 'LAME_DELEGATION_MAX_DEPTH').length;
@@ -446,20 +459,38 @@ function buildSummary(logData) {
             label: '正常な委任',
             value: `${successCount} 件`,
             tone: successCount > 0 ? 'success' : 'info'
+        },
+        {
+            label: 'NS IPアドレス未取得',
+            value: nameServerAddressFailures.length > 0 ? `${nameServerAddressFailures.length} 件` : 'なし',
+            tone: nameServerAddressFailures.length > 0 ? 'warning' : 'success'
         }
     ];
 
     const verdict = document.createElement('div');
     const verdictText = cnameFound
-        ? '⚠️  検査対象外: 入力名は CNAME（別名）です。ゾーン名を指定してください'
+        ? '⚠️  検査対象外: 入力名は CNAME (別名) でしたので、ゾーン名を指定してください'
         : dnameFound
             ? '⚠️  要確認: DNAME によりゾーン頂点を確定できません'
+        : nameServerAddressFailures.length > 0
+            ? '⚠️  要確認: 権威サーバーの IP アドレスを取得できないため、委任状態を確認できません'
         : failureEntries.length > 0 || maxDepthCount > 0 || missingAuthorityNsCount > 0
             ? '⚠️  異常検出: 委任に不整合があります'
-            : networkErrors.length > 0
-                ? '⚠️  要確認: 通信エラーにより委任状態を確認できません'
-                : '✅  正常: 正しく委任されています';
-    verdict.className = `summary-verdict ${aliasIssue || failureEntries.length > 0 || maxDepthCount > 0 || missingAuthorityNsCount > 0 || networkErrors.length > 0 ? 'warning' : 'success'}`;
+        : networkErrors.length > 0
+            ? '⚠️  要確認: 通信エラーにより委任状態を確認できません'
+            : '✅  正常: 正しく委任されています';
+
+    verdict.className = `summary-verdict ${
+        aliasIssue ||
+        nameServerAddressFailures.length > 0 ||
+        failureEntries.length > 0 ||
+        maxDepthCount > 0 ||
+        missingAuthorityNsCount > 0 ||
+        networkErrors.length > 0
+            ? 'warning'
+            : 'success'
+    }`;
+
     verdict.textContent = verdictText;
 
     const title = document.createElement('div');

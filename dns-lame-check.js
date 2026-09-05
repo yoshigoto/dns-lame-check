@@ -398,6 +398,17 @@ async function getZoneApex(domain, dnsResponseCache) {
             glueIPs,
             rfc9471: summarizeRfc9471Referral(delegation.nsRecords, delegation.additionals)
         });
+
+        if (nextServerIPs.length === 0) {
+            pushExplorationLog(
+                'LAME_DELEGATION_NO_NS_IP_ADDRESS',
+                `委任先 NSレコード (${nextNsNames.join(', ')}) の IPアドレスを取得できないため、ゾーン頂点を確認できません。`,
+                currentNs,
+                currentParent
+            );
+            break;
+        }
+
         parentNs = currentNs;
         parentServerIPs = currentServerIPs;
         currentNs = nextNsNames.join(', ');
@@ -592,8 +603,8 @@ async function traceDomain(domain, servers, dnsResponseCache, parentIP = null, c
                 results = results.concat(childResults);
             } else {
                 results.push({
-                    server: serverIp, parent: parentIP, status: 'ERROR',
-                    detail: `次の委任先 NSレコードの IPアドレスを特定できませんでした。`
+                    server: currentNSNames.join(', '), parent: serverIp, status: 'LAME_DELEGATION_NO_NS_IP_ADDRESS',
+                    detail: `委任先 NSレコード (${currentNSNames.join(', ')}) の IPアドレスを取得できないため、追跡を継続できません。`
                 });
             }
         } else {
