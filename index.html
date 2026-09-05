@@ -424,11 +424,9 @@ function buildSummary(logData) {
     if (!logData || logData.length === 0) return;
 
     const rootInfo = logData.find(item => item.status === 'INFO') || logData.find(item => item.detail && item.detail.includes('ゾーン頂点を確定')) || logData[0];
-    const apexName = rootInfo && rootInfo.detail && rootInfo.detail.includes('ゾーン頂点を確定:')
-        ? rootInfo.detail.replace(/^.*ゾーン頂点を確定:\s*/, '').replace(/\.$/, '')
-        : (rootInfo && rootInfo.detail && rootInfo.detail.includes('ゾーン頂点は'))
-            ? rootInfo.detail.replace(/^.*ゾーン頂点は\s*/, '').replace(/\.$/, '')
-            : '未判定';
+    const apexMatch = rootInfo?.detail?.match(/ゾーン頂点を確定:\s*([a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?(?:\.[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?)*)/i) ||
+        rootInfo?.detail?.match(/ゾーン頂点は\s*([a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?(?:\.[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?)*)/i);
+    const apexName = apexMatch ? apexMatch[1] : '未判定';
     const failureEntries = logData.filter(item => item.status && item.status.startsWith('LAME_DELEGATION'));
     const networkErrors = logData.filter(item => item.status === 'NETWORK_ERROR');
     const nameServerAddressFailures = logData.filter(isNameServerAddressResolutionFailure);
